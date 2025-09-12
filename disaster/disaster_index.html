@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Disaster Resources</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="/assets/favicon.ico" type="image/x-icon" />
+  <link rel="shortcut icon" href="/assets/favicon.ico" type="image/x-icon" />
+  <style>
+    :root { --brand: #bf3426; --brand-darker: #a22a1f; }
+
+    html, body { margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: #111; }
+
+    /* ===== Navbar ===== */
+    .navbar { background: var(--brand); width: 100%; }
+    .nav {
+      display: flex; align-items: center; justify-content: space-between; gap: 16px;
+      padding: 8px 16px; max-width: 1200px; margin: 0 auto;
+    }
+    .brand { display: inline-flex; align-items: center; text-decoration: none; }
+    .brand img { height: 36px; width: auto; display: block; }
+
+    /* Links row (desktop) */
+    .nav-links {
+      list-style: none; display: flex; align-items: center; gap: 8px;
+      margin: 0; padding: 0;
+    }
+    .nav-links a {
+      color: #fff; text-decoration: none; font-weight: 700;
+      padding: 8px 12px; border-radius: 4px; display: block; opacity: .95;
+    }
+    .nav-links a:hover { background: var(--brand-darker); opacity: 1; }
+
+    /* Hamburger */
+    .hamburger {
+      display: none; width: 40px; height: 36px; border: 0; background: transparent; cursor: pointer;
+      -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+    }
+    .hamburger span {
+      display:block; height:3px; margin:6px 0; background:#fff; border-radius:2px; pointer-events: none;
+    }
+
+    /* ===== Mobile layout ===== */
+    @media (max-width: 720px) {
+      .hamburger { display: inline-block; }
+      .nav { padding: 8px 10px; position: relative; }
+      .nav-links {
+        position: absolute; left: 0; right: 0; top: 100%;
+        flex-direction: column; align-items: stretch; gap: 4px;
+        background: var(--brand); padding: 8px; display: none;
+        border-top: 1px solid rgba(255,255,255,.15);
+        z-index: 1000;
+        box-shadow: 0 4px 12px rgba(0,0,0,.2);
+      }
+      .nav-links.open { display: flex; }
+      .nav-links a { padding: 10px 12px; }
+    }
+
+    /* ===== Main ===== */
+    main {
+      text-align: center;
+      padding: 48px 16px 64px;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    .hero-logo {
+      max-width: 320px;
+      width: 60%;
+      height: auto;
+      margin: 0 auto 20px;
+      display: block;
+    }
+    h1 {
+      margin: 0;
+      font-size: 1.9rem;
+      line-height: 1.3;
+    }
+    .subhead {
+      font-size: 1.1rem;
+      margin-top: 12px;
+      color: #444;
+    }
+    .cta {
+      margin-top: 24px;
+      display: inline-flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .btn {
+      display: inline-block;
+      border: 1px solid var(--brand);
+      background: var(--brand);
+      color: #fff;
+      padding: 10px 16px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-weight: 700;
+    }
+    .btn.secondary {
+      background: #fff;
+      color: var(--brand);
+    }
+    .btn:hover { filter: brightness(1.05); }
+  </style>
+</head>
+<body>
+  <!-- Hardcoded navbar with mobile hamburger -->
+  <header class="navbar">
+    <div class="nav">
+      <a href="disaster_index.html" class="brand" aria-label="Disaster Home">
+        <img src="TBC_full_logo.gif" alt="TBC Logo">
+      </a>
+
+      <button class="hamburger" type="button" aria-label="Open menu" aria-controls="navMenu" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
+
+      <ul class="nav-links" id="navMenu">
+        <li><a href="disaster_map.html">Resource Map</a></li>
+        <li><a href="disaster_survey.html">Resource Survey</a></li>
+      </ul>
+    </div>
+  </header>
+
+  <main>
+    <img class="hero-logo" src="TBC_full_logo.gif" alt="TBC Logo">
+    <h1>Disaster Resources</h1>
+    <p class="subhead">Tools for survey collection and resource mapping</p>
+
+    <div class="cta">
+      <a class="btn" href="disaster_survey.html">Resource Survey</a>
+      <a class="btn secondary" href="disaster_map.html">Resource Maps</a>
+    </div>
+  </main>
+
+  <script>
+    (function(){
+      const nav = document.querySelector('.nav');
+      const burger = nav.querySelector('.hamburger');
+      const menu = nav.querySelector('#navMenu');
+
+      function closeMenu(){
+        menu.classList.remove('open');
+        burger.setAttribute('aria-expanded','false');
+      }
+      function openMenu(){
+        menu.classList.add('open');
+        burger.setAttribute('aria-expanded','true');
+      }
+      function handleMenuToggle(e){
+        e.preventDefault();
+        const isOpen = menu.classList.contains('open');
+        isOpen ? closeMenu() : openMenu();
+      }
+
+      // Touch-first with click fallback (good for iOS Chrome)
+      let touchStarted = false;
+      burger.addEventListener('touchstart', function(e){
+        touchStarted = true;
+        handleMenuToggle(e);
+      });
+      burger.addEventListener('click', function(e){
+        if (!touchStarted) handleMenuToggle(e);
+        touchStarted = false;
+      });
+
+      // Click outside to close
+      document.addEventListener('click', function(e){
+        if (!nav.contains(e.target)) closeMenu();
+      });
+
+      // ESC to close
+      document.addEventListener('keydown', function(e){
+        if (e.key === 'Escape') closeMenu();
+      });
+
+      // Reset when resizing across breakpoint
+      let lastWide = window.innerWidth > 720;
+      window.addEventListener('resize', function(){
+        const wide = window.innerWidth > 720;
+        if (wide !== lastWide) {
+          closeMenu();
+          lastWide = wide;
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
