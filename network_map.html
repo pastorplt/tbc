@@ -144,6 +144,7 @@
     .tip { font: 13px/1.35 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
     .tip .label { color:#666; }
     .tip-name { font-size: 15px; font-weight: 600; margin-bottom: 2px; color: #111; }
+    .prayer-request { max-width: 100%; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; }
 
     /* WRAPPED polygon labels */
     .poly-label{
@@ -550,7 +551,7 @@ function applyFilters(){
     // NEW: Prayer Request line
     function prayerLine(v){
       const s = (v == null ? '' : String(v)).trim();
-      return s ? '<div><span class="label">Prayer Request:</span> ' + escapeHtml(s) + '</div>' : '';
+      return s ? '<div class="prayer-request"><span class="label">Prayer Request:</span> ' + escapeHtml(s) + '</div>' : '';
     }
 
     function infoCardHtml(props = {}){
