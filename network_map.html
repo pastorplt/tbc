@@ -554,10 +554,30 @@ function applyFilters(){
         + '</div>';
     }
 
-    // NEW: Prayer Request line
-    function prayerLine(v){
-      const s = (v == null ? '' : String(v)).trim();
-      return s ? '<div class="prayer-request"><span class="label">Prayer Request:</span> ' + escapeHtml(s) + '</div>' : '';
+    // Prayer Request line (prefer "all" column when available)
+    function prayerLine(props = {}){
+      const raw =
+        props.prayer_request ??
+        props.prayer_requests ??
+        props.all_prayer_requests ??
+        props.latest_prayer_request ??
+        props.prayer_request_latest ??
+        props.prayer_request_latest_update;
+
+      const source = (raw == null ? '' : String(raw)).trim();
+      if (!source) return '';
+
+      const splitOnDates = source
+        .split(/\s*(?=\d{1,2}\/\d{1,2}\/\d{2,4})/g)
+        .map(part => part.trim())
+        .filter(Boolean);
+
+      const segments = splitOnDates.length > 1 ? splitOnDates : [source];
+      const formatted = segments
+        .map(part => escapeHtml(part).replace(/\r?\n/g, '<br>'))
+        .join('<br><br>');
+
+      return '<div class="prayer-request"><span class="label">Prayer Request:</span> ' + formatted + '</div>';
     }
 
     function infoCardHtml(props = {}){
@@ -570,7 +590,7 @@ function applyFilters(){
         + '<div class="tip-name">'+rawName+'</div>'
         + '<div><span class="label">Leaders:</span> '+(props.leaders ?? '—')+'</div>'
         + emailLine
-        + prayerLine(props.latest_prayer_request)          // added
+        + prayerLine(props)
         + churchesLine(rawName, statusArr, leadArr, props)
         + renderGallery(photos)
         + '</div>';
@@ -633,7 +653,7 @@ function applyFilters(){
         + '<div class="tip-name" id="sheetTitle">'+rawName+'</div>'
         + '<div><span class="label">Leaders:</span> '+(props.leaders ?? '—')+'</div>'
         + emailLine
-        + prayerLine(props.latest_prayer_request)          // added
+        + prayerLine(props)
         + churchesLine(rawName, statusArr, leadArr, props)
         + renderGallery(photos)
         + '</div>';
