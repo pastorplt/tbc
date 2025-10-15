@@ -554,9 +554,10 @@ function applyFilters(){
         + '</div>';
     }
 
-    // NEW: Prayer Request line
-    function prayerLine(v){
-      const s = (v == null ? '' : String(v)).trim();
+    // Prayer Request line (prefer "all" column when available)
+    function prayerLine(props = {}){
+      const raw = props.all_prayer_requests ?? props.latest_prayer_request ?? props.prayer_request ?? props.prayer_requests;
+      const s = (raw == null ? '' : String(raw)).trim();
       return s ? '<div class="prayer-request"><span class="label">Prayer Request:</span> ' + escapeHtml(s) + '</div>' : '';
     }
 
@@ -570,7 +571,7 @@ function applyFilters(){
         + '<div class="tip-name">'+rawName+'</div>'
         + '<div><span class="label">Leaders:</span> '+(props.leaders ?? '—')+'</div>'
         + emailLine
-        + prayerLine(props.latest_prayer_request)          // added
+        + prayerLine(props)
         + churchesLine(rawName, statusArr, leadArr, props)
         + renderGallery(photos)
         + '</div>';
@@ -633,7 +634,7 @@ function applyFilters(){
         + '<div class="tip-name" id="sheetTitle">'+rawName+'</div>'
         + '<div><span class="label">Leaders:</span> '+(props.leaders ?? '—')+'</div>'
         + emailLine
-        + prayerLine(props.latest_prayer_request)          // added
+        + prayerLine(props)
         + churchesLine(rawName, statusArr, leadArr, props)
         + renderGallery(photos)
         + '</div>';

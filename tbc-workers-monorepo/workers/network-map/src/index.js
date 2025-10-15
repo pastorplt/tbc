@@ -59,6 +59,10 @@ export default {
 
           const leaders = normalizeLeaders(f['Network Leaders Names']) || '';
 
+          const allPrayerRequests = normalizeTextField(f['All Prayer Requests']);
+          const latestPrayerRequest = normalizeTextField(f['Latest Prayer Request']);
+          const prayerRequestForDisplay = allPrayerRequests || latestPrayerRequest;
+
           // ----- Photos (attachment vs strings) -----
           let photoUrls = [];
           const photoField = f['Photo'];
@@ -103,9 +107,9 @@ export default {
               tags: normalizeTextField(f['Tags']),
               number_of_churches: f['Number of Churches'] ?? '',
               unify_lead: normalizeTextField(f['Unify Lead']),
-              // NEW: prayer request fields
-              latest_prayer_request: normalizeTextField(f['Latest Prayer Request']),
-              all_prayer_requests: normalizeTextField(f['All Prayer Requests']),
+              // Prayer request fields (prefer "All Prayer Requests" when available)
+              latest_prayer_request: prayerRequestForDisplay,
+              all_prayer_requests: allPrayerRequests,
               // Photos/Images
               photo1, photo2, photo3, photo4, photo5, photo6,
               photo_count,
