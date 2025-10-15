@@ -567,12 +567,31 @@ function applyFilters(){
       const source = (raw == null ? '' : String(raw)).trim();
       if (!source) return '';
 
-      const splitOnDates = source
-        .split(/\s*(?=\b\d{1,2}\/\d{1,2}\/\d{2,4})/g)
-        .map(part => part.trim())
-        .filter(Boolean);
+      const dateBlockPattern = /\b\d{1,2}\/\d{1,2}\/\d{2,4}[\s\S]*?(?=\b\d{1,2}\/\d{1,2}\/\d{2,4}|$)/g;
+      const matches = source.match(dateBlockPattern) || [];
 
-      const segments = splitOnDates.length > 1 ? splitOnDates : [source];
+      const segments = [];
+
+      if (matches.length) {
+        let cursor = 0;
+        for (const block of matches) {
+          const idx = source.indexOf(block, cursor);
+          if (idx > cursor) {
+            const prefix = source.slice(cursor, idx).trim();
+            if (prefix) segments.push(prefix);
+          }
+
+          segments.push(block.trim());
+          cursor = idx + block.length;
+        }
+
+        if (cursor < source.length) {
+          const tail = source.slice(cursor).trim();
+          if (tail) segments.push(tail);
+        }
+      } else {
+        segments.push(source);
+      }
       const formatted = segments
         .map(part => escapeHtml(part).replace(/\r?\n/g, '<br>'))
         .join('<br>');
