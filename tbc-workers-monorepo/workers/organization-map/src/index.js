@@ -1,5 +1,6 @@
 // organizations-map worker
 // Routes you attach to this Worker:
+//   GET  /orgs               -> list available GeoJSON files
 //   GET  /orgs/<geojson-file>.geojson
 //   POST /orgs/admin/regenerate
 //   GET  /orgs/ok
@@ -22,6 +23,13 @@ export default {
 
     try {
       const objectKey = getGeoJsonKey(env);
+
+      // List available GeoJSON files so other services (e.g. network_map.api)
+      // can discover what has already been generated.
+      if (request.method === "GET" && (pathname === "/orgs" || pathname === "/orgs/")) {
+        const files = await listAllGeoJson(env.ORG_MAP_BUCKET);
+        return withCORS(json({ files }));
+      }
 
       // Serve the latest generated GeoJSON from R2
       if (
@@ -184,4 +192,23 @@ function getGeoJsonKey(env) {
 
 function isSafeKey(key) {
   return typeof key === "string" && !key.includes("../") && !key.startsWith("/");
+}
+
+async function listAllGeoJson(bucket) {
+  const files = [];
+  let cursor;
+  do {
+    const page = await bucket.list({ cursor });
+    for (const obj of page.objects || []) {
+      if (obj?.key && obj.key.endsWith(".geojson") && isSafeKey(obj.key)) {
+        files.push({
+          key: obj.key,
+          size: obj.size ?? null,
+          uploaded: obj.uploaded ? new Date(obj.uploaded).toISOString() : null
+        });
+      }
+    }
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  return files;
 }
