@@ -15,4 +15,4 @@ bucket_name = "tbc-data"
 [vars]
 AIRTABLE_BASE_ID = "app1TcNtvts4fkqdm"
 AIRTABLE_VIEW_NAME = "Grid view"
-ORG_TABLE_NAME = "Organizations"
+# ORG_TABLE_NAME = "Organizations"
