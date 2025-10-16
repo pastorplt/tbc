@@ -6,7 +6,7 @@ keep_vars = true
 
 [[routes]]
 pattern = "api.tbc.city/orgs*"
-zone_name = "tbc.city" 
+zone_name = "tbc.city"
 
 [[r2_buckets]]
 binding = "ORG_MAP_BUCKET"
