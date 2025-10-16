@@ -3,6 +3,7 @@
 //   GET  /orgs               -> list available GeoJSON files
 //   GET  /orgs/<geojson-file>.geojson
 //   POST /orgs/admin/regenerate
+//   POST /orgs/admin/delete
 //   GET  /orgs/ok
 //
 // Env vars (Settings → Variables/Secrets):
@@ -177,6 +178,25 @@ export default {
           updatedAt: new Date().toISOString(),
           objectKey: targetKey
         }));
+      }
+
+      if (request.method === "POST" && pathname === "/orgs/admin/delete") {
+        const token = (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
+        if (!token || token !== env.REGEN_TOKEN) return withCORS(json({ error: "Unauthorized" }, 401));
+
+        const body = await readJsonBody(request);
+        const rawKey = typeof body.key === "string" ? body.key.trim() : "";
+        if (!rawKey) return withCORS(json({ error: "Missing key" }, 400));
+        if (!isSafeKey(rawKey) || !rawKey.endsWith(".geojson")) {
+          return withCORS(json({ error: "Invalid GeoJSON file name" }, 400));
+        }
+
+        const exists = await env.ORG_MAP_BUCKET.head(rawKey);
+        if (!exists) return withCORS(json({ error: "GeoJSON file not found", key: rawKey }, 404));
+
+        await env.ORG_MAP_BUCKET.delete(rawKey);
+
+        return withCORS(json({ ok: true, deleted: rawKey }));
       }
 
       if (request.method === "GET" && pathname === "/orgs/ok") {
