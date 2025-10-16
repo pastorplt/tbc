@@ -50,6 +50,60 @@
     .btn:active { transform: translateY(1px); }
     .btn[disabled] { opacity:.6; cursor:not-allowed; }
 
+    .card + .card { margin-top: 24px; }
+
+    .btn-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 0;
+      border: none;
+      background: none;
+      color: var(--brand);
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn-link:hover { text-decoration: underline; }
+
+    label { font-weight: 600; display: block; margin-bottom: 6px; }
+    input[type="text"] {
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid #d1d5db;
+      font-size: 15px;
+      margin-bottom: 10px;
+    }
+    input[type="text"]:focus {
+      outline: 2px solid rgba(191,52,38,.35);
+      outline-offset: 2px;
+    }
+    small { color: #6b7280; }
+
+    .file-list {
+      list-style: none;
+      padding: 0;
+      margin: 10px 0 0;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .file-list li {
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      font-size: 14px;
+    }
+    .file-meta { color: #6b7280; font-size: 12px; }
+
+    .status-text { margin-top: 4px; font-size: 14px; }
+    .status-text.error { color: #b91c1c; }
+    .status-text.success { color: #047857; }
+
     /* Toast */
     .toast {
       position: fixed; right: 16px; bottom: 16px; z-index: 10000;
@@ -103,6 +157,12 @@
       <button class="btn admin-action" data-name="Disaster Data" data-url="https://api.tbc.city/disaster/admin/regenerate">Regen Disaster</button>
       <button class="btn admin-action" data-name="Organizations" data-url="https://api.tbc.city/orgs/admin/regenerate">Regen Orgs</button>
     </div>
+
+    <div class="card" aria-label="Organization datasets">
+      <h2 style="margin:0 0 12px;font-size:20px;">Organization GeoJSON datasets</h2>
+      <p style="margin:0 0 16px;font-size:14px;color:#4b5563;">Delete old or test datasets from the organization map bucket.</p>
+      <button class="btn btn-danger" id="deleteOrgBtn">Delete GeoJSON…</button>
+    </div>
   </main>
 
   <!-- Confirm modal -->
@@ -115,6 +175,26 @@
     <div class="actions">
       <button type="button" class="btn btn-ghost" id="cancelBtn">Cancel</button>
       <button type="button" class="btn btn-danger" id="confirmBtn">Run now</button>
+    </div>
+  </div>
+
+  <!-- Delete modal -->
+  <div id="deleteBackdrop" class="modal-backdrop" aria-hidden="true"></div>
+  <div id="deleteModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="deleteTitle" aria-describedby="deleteDesc">
+    <header id="deleteTitle">Delete organization GeoJSON</header>
+    <div class="content">
+      <p id="deleteDesc" style="margin-top:0;">Choose the dataset you want to delete. This removes the GeoJSON file from the organization map bucket.</p>
+      <form id="deleteForm">
+        <label for="deleteKey">GeoJSON file name</label>
+        <input type="text" id="deleteKey" name="deleteKey" placeholder="organization_map.geojson" autocomplete="off" required />
+        <small>Tip: click a filename below to fill it in.</small>
+        <ul id="deleteList" class="file-list" aria-live="polite"></ul>
+        <p id="deleteStatus" class="status-text" role="status" aria-live="polite"></p>
+      </form>
+    </div>
+    <div class="actions">
+      <button type="button" class="btn btn-ghost" id="deleteCancel">Cancel</button>
+      <button type="submit" form="deleteForm" class="btn btn-danger" id="deleteConfirm">Delete file</button>
     </div>
   </div>
 
@@ -156,7 +236,12 @@
     }
 
     // close on ESC / click backdrop
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closeModal();
+        closeDeleteModal();
+      }
+    });
     backdrop.addEventListener('click', closeModal);
     cancelBtn.addEventListener('click', closeModal);
 
@@ -231,6 +316,143 @@
       // Restore button
       button.disabled = false;
       button.textContent = `Regen ${name}`;
+    });
+
+    // ===== Delete workflow =====
+    const deleteBtn = document.getElementById('deleteOrgBtn');
+    const deleteModal = document.getElementById('deleteModal');
+    const deleteBackdrop = document.getElementById('deleteBackdrop');
+    const deleteForm = document.getElementById('deleteForm');
+    const deleteKeyInput = document.getElementById('deleteKey');
+    const deleteList = document.getElementById('deleteList');
+    const deleteStatus = document.getElementById('deleteStatus');
+    const deleteCancelBtn = document.getElementById('deleteCancel');
+    const deleteConfirmBtn = document.getElementById('deleteConfirm');
+
+    function resetDeleteStatus(msg = '', className = '') {
+      deleteStatus.textContent = msg;
+      deleteStatus.className = `status-text${className ? ' ' + className : ''}`;
+    }
+
+    function openDeleteModal() {
+      if (!deleteModal || !deleteBackdrop) return;
+      deleteModal.classList.add('open');
+      deleteBackdrop.classList.add('open');
+      if (deleteKeyInput) deleteKeyInput.focus();
+      resetDeleteStatus();
+    }
+
+    function closeDeleteModal() {
+      if (!deleteModal || !deleteBackdrop) return;
+      deleteModal.classList.remove('open');
+      deleteBackdrop.classList.remove('open');
+      if (deleteForm) deleteForm.reset();
+      resetDeleteStatus();
+    }
+
+    function renderFileList(files) {
+      if (!deleteList) return;
+      deleteList.innerHTML = '';
+      if (!files.length) {
+        const li = document.createElement('li');
+        li.textContent = 'No GeoJSON files found in the bucket.';
+        deleteList.appendChild(li);
+        return;
+      }
+      for (const file of files) {
+        const li = document.createElement('li');
+        const nameBtn = document.createElement('button');
+        nameBtn.type = 'button';
+        nameBtn.className = 'btn-link';
+        nameBtn.textContent = file.key;
+        nameBtn.addEventListener('click', () => {
+          deleteKeyInput.value = file.key;
+          deleteKeyInput.focus();
+        });
+        const meta = document.createElement('span');
+        meta.className = 'file-meta';
+        const sizeKb = file.size ? `${Math.round(file.size / 102.4) / 10} KB` : null;
+        const uploaded = file.uploaded ? new Date(file.uploaded).toLocaleString() : null;
+        meta.textContent = [sizeKb, uploaded].filter(Boolean).join(' • ');
+        li.appendChild(nameBtn);
+        if (meta.textContent) li.appendChild(meta);
+        deleteList.appendChild(li);
+      }
+    }
+
+    async function loadGeoJsonList() {
+      if (!deleteList) return;
+      deleteList.innerHTML = '';
+      const loading = document.createElement('li');
+      loading.textContent = 'Loading dataset list…';
+      deleteList.appendChild(loading);
+      try {
+        const resp = await fetch('https://api.tbc.city/orgs');
+        if (!resp.ok) throw new Error(`Failed to load: ${resp.status}`);
+        const data = await resp.json();
+        const files = Array.isArray(data?.files) ? data.files : [];
+        renderFileList(files);
+      } catch (err) {
+        console.error('Failed to load GeoJSON list', err);
+        deleteList.innerHTML = '';
+        const li = document.createElement('li');
+        li.textContent = 'Unable to load dataset list. Please try again later.';
+        deleteList.appendChild(li);
+      }
+    }
+
+    if (deleteBackdrop) deleteBackdrop.addEventListener('click', closeDeleteModal);
+    if (deleteCancelBtn) deleteCancelBtn.addEventListener('click', closeDeleteModal);
+
+    if (deleteBtn) deleteBtn.addEventListener('click', async () => {
+      if (deleteKeyInput) deleteKeyInput.value = '';
+      resetDeleteStatus();
+      openDeleteModal();
+      await loadGeoJsonList();
+    });
+
+    if (deleteForm) deleteForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const key = deleteKeyInput ? deleteKeyInput.value.trim() : '';
+      if (!key) {
+        resetDeleteStatus('Enter the exact GeoJSON filename to delete.', 'error');
+        if (deleteKeyInput) deleteKeyInput.focus();
+        return;
+      }
+
+      deleteConfirmBtn.disabled = true;
+      deleteCancelBtn.disabled = true;
+      resetDeleteStatus('Deleting…');
+
+      try {
+        const resp = await fetch('https://api.tbc.city/orgs/admin/delete', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + REGEN_TOKEN,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ key })
+        });
+        const text = await resp.text();
+        let data = {};
+        try { data = JSON.parse(text); } catch (err) { data = {}; }
+
+        if (!resp.ok || !data?.ok) {
+          const message = data?.error || `Failed with status ${resp.status}`;
+          resetDeleteStatus(message, 'error');
+          return;
+        }
+
+        resetDeleteStatus(`Deleted ${data.deleted || key}.`, 'success');
+        showToast(`Deleted ${data.deleted || key}`);
+        await loadGeoJsonList();
+      } catch (err) {
+        console.error('Delete request failed', err);
+        resetDeleteStatus('Request error. Check console for details.', 'error');
+      } finally {
+        deleteConfirmBtn.disabled = false;
+        deleteCancelBtn.disabled = false;
+      }
     });
   </script>
 </body>
