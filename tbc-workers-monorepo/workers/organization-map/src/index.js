@@ -53,7 +53,10 @@ export default {
       }
 
       // Regenerate from Airtable -> write to R2
-      if (request.method === "POST" && pathname === "/orgs/admin/regenerate") {
+      if (
+          request.method === "POST" &&
+          (pathname === "/orgs/admin/regenerate" || pathname === "/orgs/admin/regenerate/")
+          ) {
         const token = (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
         if (!token || token !== env.REGEN_TOKEN) return withCORS(json({ error: "Unauthorized" }, 401));
 
@@ -84,7 +87,8 @@ export default {
 /* ---------------- Auto-complete handler ---------------- */
 
 async function handleAutoComplete(request, env, authToken) {
-  const url = new URL(request.url);
+  const origin = new URL(request.url).origin;
+  const internalUrl = `${origin}/orgs/admin/regenerate`;
   let cursor = null;
   let totalFeatures = 0;
   let iterations = 0;
@@ -94,7 +98,7 @@ async function handleAutoComplete(request, env, authToken) {
     iterations++;
     
     // Call ourselves internally
-    const response = await fetch(url.toString(), {
+    const response = await fetch(internalUrl, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${authToken}`,
