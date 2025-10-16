@@ -53,6 +53,25 @@
     .legend-header { display: none; }
     .legend-title { font-weight: 700; font-size: 14px; margin: 4px 0 8px; color: #111; }
 
+    .dataset-selector {
+      margin-bottom: 12px;
+      padding: 10px;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      background: #f8fafc;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .dataset-title { font-weight: 700; font-size: 13px; color: #0f172a; text-transform: uppercase; letter-spacing: .04em; }
+    .dataset-options { display: flex; flex-direction: column; gap: 8px; }
+    .dataset-option { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; cursor: pointer; }
+    .dataset-option input { margin-top: 3px; cursor: pointer; }
+    .dataset-info { display: flex; flex-direction: column; gap: 2px; }
+    .dataset-name { font-weight: 600; color: #0f172a; }
+    .dataset-meta { font-size: 11px; color: #475569; }
+    .dataset-status { font-size: 12px; color: #475569; }
+
     details { margin-bottom: 8px; border-radius: 8px; background: #f8fafc; border: 1px solid #e5e7eb; padding: 6px 8px; }
     details[open] { background: #eef2ff; }
     summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 4px; font-weight: 600; }
@@ -157,6 +176,12 @@
       </div>
       <div class="legend-title desktop-only">Filters</div>
 
+      <div class="dataset-selector" id="datasetSelector" hidden>
+        <div class="dataset-title">GeoJSON layers</div>
+        <div id="datasetOptions" class="dataset-options"></div>
+        <div id="datasetStatus" class="dataset-status"></div>
+      </div>
+
       <details id="grp-county"><summary><span>County</span><span class="chev">▶</span></summary><div class="tag-list" id="list-county"></div></details>
       <details id="grp-network"><summary><span>Network Name</span><span class="chev">▶</span></summary><div class="tag-list" id="list-network"></div></details>
       <details id="grp-type"><summary><span>Organization Type</span><span class="chev">▶</span></summary><div class="tag-list" id="list-type"></div></details>
@@ -198,10 +223,19 @@
     const baseList = controlEl.querySelector('.leaflet-control-layers-base');
     if (baseList) { const h = document.createElement('div'); h.className = 'basemap-heading'; h.textContent = 'Basemap'; baseList.prepend(h); }
 
-    const GEOJSON_URL = "https://api.tbc.city/orgs/organization_map.geojson";
+    const API_BASE = "https://api.tbc.city";
+    const DEFAULT_GEOJSON_KEY = "organization_map.geojson";
+
+    const datasetSelectorEl = document.getElementById('datasetSelector');
+    const datasetOptionsEl = document.getElementById('datasetOptions');
+    const datasetStatusEl = document.getElementById('datasetStatus');
 
     let allFeatures = [];
     let FIELDS = {};
+    let preselectApplied = false;
+
+    const datasetCache = new Map();
+    let selectedDatasetKeys = new Set([DEFAULT_GEOJSON_KEY]);
     const el = (s) => document.querySelector(s);
     const $ = (s) => document.querySelectorAll(s);
 
@@ -289,6 +323,68 @@
       try { const h = hex.replace('#',''); const r=parseInt(h.slice(0,2),16), g=parseInt(h.slice(2,4),16), b=parseInt(h.slice(4,6),16); const yiq=(r*299+g*587+b*114)/1000; return yiq>=150?'#111':'#fff'; } catch { return '#fff'; }
     }
 
+    function datasetDisplayName(key) {
+      if (!key || typeof key !== "string") return "GeoJSON";
+      const base = key.replace(/\.geojson$/i, "").replace(/[_-]+/g, " ").trim();
+      if (!base) return key;
+      return base.replace(/\b\w/g, (c) => c.toUpperCase());
+    }
+
+    function formatFileSize(bytes) {
+      const n = Number(bytes);
+      if (!Number.isFinite(n) || n <= 0) return "";
+      if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+      if (n >= 1024) return `${Math.round(n / 1024)} KB`;
+      return `${n} B`;
+    }
+
+    function formatDatasetMeta(file = {}) {
+      const parts = [];
+      if (file.key) parts.push(file.key);
+      if (file.uploaded) {
+        const dt = new Date(file.uploaded);
+        if (!Number.isNaN(dt.getTime())) {
+          parts.push(`Updated ${dt.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`);
+        }
+      }
+      if (file.size != null) {
+        const size = formatFileSize(file.size);
+        if (size) parts.push(size);
+      }
+      return parts.join(' • ');
+    }
+
+    function datasetUrlForKey(key) {
+      if (typeof key !== "string" || !key.trim()) return `${API_BASE}/orgs/${DEFAULT_GEOJSON_KEY}`;
+      const safeSegments = key.split('/').map(seg => encodeURIComponent(seg));
+      return `${API_BASE}/orgs/${safeSegments.join('/')}`;
+    }
+
+    async function loadDatasetList() {
+      const resp = await fetch(`${API_BASE}/orgs`, { cache: 'no-cache' });
+      if (!resp.ok) throw new Error(`Failed to list GeoJSON files (${resp.status})`);
+      const data = await resp.json();
+      const files = Array.isArray(data?.files) ? data.files : [];
+      return files.filter(f => f && typeof f.key === 'string' && f.key.endsWith('.geojson'));
+    }
+
+    function loadDataset(key) {
+      if (!datasetCache.has(key)) {
+        const promise = (async () => {
+          const resp = await fetch(datasetUrlForKey(key), { cache: 'no-cache' });
+          if (!resp.ok) throw new Error(`Failed to load ${key} (${resp.status})`);
+          const data = await resp.json();
+          const features = Array.isArray(data?.features) ? data.features : [];
+          return features.filter(f => f && f.type === 'Feature');
+        })().catch(err => {
+          datasetCache.delete(key);
+          throw err;
+        });
+        datasetCache.set(key, promise);
+      }
+      return datasetCache.get(key);
+    }
+
     // === Church icon (single path to avoid seam; shorter building to y=18) ===
     function churchSVG(color, size=20){
       const s = Number(size) || 20;
@@ -321,6 +417,97 @@
 
         label.appendChild(input); label.appendChild(span); container.appendChild(label);
       });
+    }
+
+    function buildDatasetSelector(files = []) {
+      if (!datasetOptionsEl) return;
+
+      const dedup = new Map();
+      files.forEach(file => {
+        if (!file || typeof file.key !== 'string') return;
+        if (!file.key.endsWith('.geojson')) return;
+        if (!dedup.has(file.key)) dedup.set(file.key, file);
+      });
+      if (!dedup.has(DEFAULT_GEOJSON_KEY)) {
+        dedup.set(DEFAULT_GEOJSON_KEY, { key: DEFAULT_GEOJSON_KEY });
+      }
+
+      const sorted = Array.from(dedup.values()).sort((a, b) => {
+        const timeA = Date.parse(a?.uploaded || '');
+        const timeB = Date.parse(b?.uploaded || '');
+        if (!Number.isNaN(timeA) && !Number.isNaN(timeB) && timeA !== timeB) {
+          return timeB - timeA;
+        }
+        if (!Number.isNaN(timeB) && Number.isNaN(timeA)) return 1;
+        if (!Number.isNaN(timeA) && Number.isNaN(timeB)) return -1;
+        return String(a.key).localeCompare(String(b.key));
+      });
+
+      const availableKeys = new Set(sorted.map(f => f.key));
+      selectedDatasetKeys = new Set(Array.from(selectedDatasetKeys).filter(key => availableKeys.has(key)));
+      if (selectedDatasetKeys.size === 0) selectedDatasetKeys.add(DEFAULT_GEOJSON_KEY);
+
+      datasetOptionsEl.innerHTML = '';
+      sorted.forEach(file => {
+        const option = document.createElement('label');
+        option.className = 'dataset-option';
+
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.value = file.key;
+        input.checked = selectedDatasetKeys.has(file.key);
+
+        const info = document.createElement('div');
+        info.className = 'dataset-info';
+
+        const nameSpan = document.createElement('div');
+        nameSpan.className = 'dataset-name';
+        nameSpan.textContent = datasetDisplayName(file.key);
+
+        info.appendChild(nameSpan);
+
+        const metaText = formatDatasetMeta(file);
+        if (metaText) {
+          const metaSpan = document.createElement('div');
+          metaSpan.className = 'dataset-meta';
+          metaSpan.textContent = metaText;
+          info.appendChild(metaSpan);
+        }
+
+        option.appendChild(input);
+        option.appendChild(info);
+
+        input.addEventListener('change', async () => {
+          const checked = input.checked;
+          if (checked) selectedDatasetKeys.add(file.key); else selectedDatasetKeys.delete(file.key);
+          if (datasetStatusEl) datasetStatusEl.textContent = 'Loading…';
+          try {
+            const result = await refreshDatasets({ preserveFilters: true });
+            updateDatasetStatus(result);
+          } catch (err) {
+            console.error('Failed to load datasets', err);
+            if (datasetStatusEl) datasetStatusEl.textContent = 'Failed to load data.';
+            input.checked = !checked;
+            if (checked) selectedDatasetKeys.delete(file.key); else selectedDatasetKeys.add(file.key);
+            updateDatasetStatus({ datasetCount: selectedDatasetKeys.size, featureCount: allFeatures.length });
+          }
+        });
+
+        datasetOptionsEl.appendChild(option);
+      });
+    }
+
+    function updateDatasetStatus(info = {}) {
+      if (!datasetStatusEl) return;
+      const datasetCount = Number(info.datasetCount || info.datasets || 0);
+      const featureCount = Number(info.featureCount || info.features || 0);
+      if (!datasetCount) {
+        datasetStatusEl.textContent = 'Select at least one dataset to display.';
+        return;
+      }
+      const datasetLabel = datasetCount === 1 ? 'dataset' : 'datasets';
+      const featureLabel = featureCount === 1 ? 'location' : 'locations';
+      datasetStatusEl.textContent = `Showing ${datasetCount} ${datasetLabel} (${featureCount} ${featureLabel})`;
     }
 
     function chipsRow(props){
@@ -394,20 +581,26 @@
     }
 
     function applyFilters() {
-      const selections = {
+      const selections = getCurrentFilterSelections();
+      drawMarkers(filterFeaturesBySelections(selections));
+      collapseAllSections();
+    }
+    function clearFilters() {
+      document.querySelectorAll('#legendPanel input[type="checkbox"][data-group]').forEach(cb => cb.checked = false);
+      applyFilters();
+    }
+    function collapseAllSections() { document.querySelectorAll('#legendPanel details[open]').forEach(d => d.removeAttribute('open')); }
+
+    function getSelected(groupKey) { return Array.from(document.querySelectorAll(`input[type="checkbox"][data-group="${groupKey}"]:checked`)).map(i => i.value); }
+    function getCurrentFilterSelections() {
+      return {
         county: getSelected("county"),
         network: getSelected("network"),
         type: getSelected("type"),
         category: getSelected("category"),
         denomination: getSelected("denomination"),
       };
-      drawMarkers(allFeatures.filter(f => featureMatchesSelections(f, selections)));
-      collapseAllSections();
     }
-    function clearFilters() { document.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false); applyFilters(); }
-    function collapseAllSections() { document.querySelectorAll('#legendPanel details[open]').forEach(d => d.removeAttribute('open')); }
-
-    function getSelected(groupKey) { return Array.from(document.querySelectorAll(`input[type="checkbox"][data-group="${groupKey}"]:checked`)).map(i => i.value); }
     function featureMatchesSelections(f, sel) {
       const p = f.properties || {};
       const county = normalizeTags(p[FIELDS.county]);
@@ -422,6 +615,15 @@
       if (sel.denomination.length && !sel.denomination.some(t => denom.includes(t))) return false;
       return true;
     }
+    function filterFeaturesBySelections(selections) { return allFeatures.filter(f => featureMatchesSelections(f, selections)); }
+    function applyFilterSelectionsState(selections = {}) {
+      Object.entries(selections).forEach(([group, values]) => {
+        const desired = new Set((values || []).map(v => String(v).toLowerCase()));
+        document.querySelectorAll(`input[type="checkbox"][data-group="${group}"]`).forEach(cb => {
+          cb.checked = desired.has(cb.value.toLowerCase());
+        });
+      });
+    }
 
     // ===== Bootstrap =====
     function preselectFromParams() {
@@ -433,40 +635,139 @@
       if (preCounty.length || preNetwork.length) applyFilters();
     }
 
-    fetch(GEOJSON_URL, { cache: 'no-cache' })
-      .then(r => r.json())
-      .then(data => {
-        const features = Array.isArray(data?.features) ? data.features : [];
-        allFeatures = features;
-        if (!features.length) return;
+    function updateFeatureData(features = [], previousSelections) {
+      allFeatures = Array.isArray(features) ? features : [];
+      const sampleFeature = allFeatures.find(f => f && f.properties && Object.keys(f.properties || {}).length) || null;
+      const sampleProps = sampleFeature ? sampleFeature.properties : {};
+      FIELDS = resolveFieldsFromSample(sampleProps || {});
+      computeGlobalTagColors(allFeatures);
 
-        FIELDS = resolveFieldsFromSample(features[0]?.properties || {});
-        // Build global color map (consistent across filters + popup)
-        computeGlobalTagColors(allFeatures);
-        buildTagList(el("#list-county"), uniqueSortedTags(features, FIELDS.county), "county");
-        buildTagList(el("#list-network"), uniqueSortedTags(features, FIELDS.network), "network");
-        buildTagList(el("#list-type"), uniqueSortedTags(features, FIELDS.type), "type");
-        
-        // category and denomination hide or show behavior
-        const catTags = uniqueSortedTags(features, FIELDS.category);
-        const denomTags = uniqueSortedTags(features, FIELDS.denomination);
-        
+      const countyList = el('#list-county');
+      if (countyList) buildTagList(countyList, FIELDS.county ? uniqueSortedTags(allFeatures, FIELDS.county) : [], 'county');
+
+      const networkList = el('#list-network');
+      if (networkList) buildTagList(networkList, FIELDS.network ? uniqueSortedTags(allFeatures, FIELDS.network) : [], 'network');
+
+      const typeList = el('#list-type');
+      if (typeList) buildTagList(typeList, FIELDS.type ? uniqueSortedTags(allFeatures, FIELDS.type) : [], 'type');
+
+      const categoryList = el('#list-category');
+      const categoryGroup = el('#grp-category');
+      const catTags = FIELDS.category ? uniqueSortedTags(allFeatures, FIELDS.category) : [];
+      if (categoryList) {
         if (catTags.length) {
-          buildTagList(el("#list-category"), catTags, "category");
+          buildTagList(categoryList, catTags, 'category');
+          if (categoryGroup) categoryGroup.style.display = '';
         } else {
-          el("#grp-category").style.display = "none";
+          categoryList.innerHTML = '';
+          if (categoryGroup) categoryGroup.style.display = 'none';
         }
-        
+      }
+
+      const denomList = el('#list-denomination');
+      const denomGroup = el('#grp-denomination');
+      const denomTags = FIELDS.denomination ? uniqueSortedTags(allFeatures, FIELDS.denomination) : [];
+      if (denomList) {
         if (denomTags.length) {
-          buildTagList(el("#list-denomination"), denomTags, "denomination");
+          buildTagList(denomList, denomTags, 'denomination');
+          if (denomGroup) denomGroup.style.display = '';
         } else {
-          el("#grp-denomination").style.display = "none";
+          denomList.innerHTML = '';
+          if (denomGroup) denomGroup.style.display = 'none';
+        }
+      }
+
+      if (previousSelections) {
+        applyFilterSelectionsState(previousSelections);
+        drawMarkers(filterFeaturesBySelections(previousSelections));
+      } else {
+        drawMarkers(allFeatures);
+        if (!preselectApplied) {
+          preselectFromParams();
+          preselectApplied = true;
+        }
+      }
+    }
+
+    async function refreshDatasets({ preserveFilters = true } = {}) {
+      const keys = Array.from(selectedDatasetKeys);
+      const previousSelections = preserveFilters && preselectApplied ? getCurrentFilterSelections() : null;
+
+      if (!keys.length) {
+        updateFeatureData([], previousSelections);
+        return { datasetCount: 0, featureCount: 0 };
+      }
+
+      const collections = await Promise.all(keys.map(loadDataset));
+      const combined = collections.flat().filter(f => f && f.type === 'Feature');
+      updateFeatureData(combined, previousSelections);
+      return { datasetCount: keys.length, featureCount: combined.length };
+    }
+
+    async function loadDefaultDataset(silent = false) {
+      selectedDatasetKeys = new Set([DEFAULT_GEOJSON_KEY]);
+      if (datasetSelectorEl) datasetSelectorEl.hidden = true;
+      if (datasetOptionsEl) datasetOptionsEl.innerHTML = '';
+      if (datasetStatusEl) datasetStatusEl.textContent = '';
+      try {
+        const features = await loadDataset(DEFAULT_GEOJSON_KEY);
+        updateFeatureData(features, null);
+      } catch (err) {
+        console.error('Failed to load org GeoJSON:', err);
+        if (!silent) alert('Failed to load organization map data.');
+      }
+    }
+
+    async function checkAuthStatus() {
+      try {
+        const resp = await fetch('/auth/status', { credentials: 'include', cache: 'no-store' });
+        if (!resp.ok) return false;
+        const data = await resp.json();
+        return !!data?.authenticated;
+      } catch (err) {
+        return false;
+      }
+    }
+
+    async function initializeDatasets() {
+      try {
+        const authed = await checkAuthStatus();
+        if (!authed) {
+          await loadDefaultDataset();
+          return;
         }
 
-        drawMarkers(allFeatures);
-        preselectFromParams();
-      })
-      .catch(err => { console.error("Failed to load org GeoJSON:", err); alert("Failed to load organization map data."); });
+        if (datasetSelectorEl) datasetSelectorEl.hidden = false;
+
+        let files = [];
+        let listMessage = '';
+        try {
+          files = await loadDatasetList();
+        } catch (err) {
+          console.error('Failed to list GeoJSON files', err);
+          listMessage = 'Failed to load dataset list. Showing default data.';
+          if (datasetStatusEl) datasetStatusEl.textContent = listMessage;
+        }
+
+        buildDatasetSelector(files);
+
+        try {
+          const result = await refreshDatasets({ preserveFilters: false });
+          updateDatasetStatus(result);
+          if (listMessage && datasetStatusEl) {
+            datasetStatusEl.textContent = `${listMessage} ${datasetStatusEl.textContent}`.trim();
+          }
+        } catch (err) {
+          console.error('Failed to load datasets', err);
+          if (datasetStatusEl) datasetStatusEl.textContent = 'Failed to load data.';
+        }
+      } catch (err) {
+        console.error('Failed to initialize datasets', err);
+        await loadDefaultDataset(true);
+      }
+    }
+
+    initializeDatasets();
 
     el("#applyFilters").addEventListener("click", applyFilters);
     el("#clearFilters").addEventListener("click", clearFilters);
