@@ -1,17 +1,18 @@
 // organizations-map worker
 // Routes you attach to this Worker:
-//   GET  /orgs/organization_map.geojson
+//   GET  /orgs/<geojson-file>.geojson
 //   POST /orgs/admin/regenerate
 //   GET  /orgs/ok
 //
 // Env vars (Settings → Variables/Secrets):
 //   AIRTABLE_TOKEN, AIRTABLE_BASE_ID, REGEN_TOKEN
 //   ORG_TABLE_NAME (default "Master List")
+//   ORG_GEOJSON_FILE (default "organization_map.geojson")
 //   FIELD_LAT (default "Latitude"), FIELD_LON (default "Longitude")
 //   (optional) AIRTABLE_VIEW_NAME
 //
 // R2 binding (Settings → Bindings → R2):
-//   ORG_MAP_BUCKET  -> your bucket (object key: organization_map.geojson)
+//   ORG_MAP_BUCKET  -> your bucket (object key: configurable via ORG_GEOJSON_FILE)
 
 export default {
   async fetch(request, env) {
@@ -20,10 +21,19 @@ export default {
     if (request.method === "OPTIONS") return withCORS(new Response(null, { status: 204 }));
 
     try {
+      const objectKey = getGeoJsonKey(env);
+
       // Serve the latest generated GeoJSON from R2
-      if (request.method === "GET" && pathname === "/orgs/organization_map.geojson") {
-        const obj = await env.ORG_MAP_BUCKET.get("organization_map.geojson");
-        if (!obj) return withCORS(json({ error: "Organization GeoJSON not generated yet" }, 404));
+      if (
+        request.method === "GET" &&
+        pathname.startsWith("/orgs/") &&
+        pathname.endsWith(".geojson") &&
+        pathname !== "/orgs/admin/regenerate"
+      ) {
+        const requestedKey = pathname.replace(/^\/orgs\//, "");
+        if (!isSafeKey(requestedKey)) return withCORS(json({ error: "Invalid GeoJSON file name" }, 400));
+        const obj = await env.ORG_MAP_BUCKET.get(requestedKey);
+        if (!obj) return withCORS(json({ error: "Organization GeoJSON not generated yet", key: requestedKey }, 404));
         return withCORS(new Response(obj.body, {
           headers: {
             "Content-Type": "application/geo+json; charset=utf-8",
@@ -81,7 +91,9 @@ export default {
 
         const fc = JSON.stringify({ type: "FeatureCollection", features });
 
-        await env.ORG_MAP_BUCKET.put("organization_map.geojson", fc, {
+        if (!isSafeKey(objectKey)) throw new Error("Invalid GeoJSON file name");
+
+        await env.ORG_MAP_BUCKET.put(objectKey, fc, {
           httpMetadata: {
             contentType: "application/geo+json; charset=utf-8",
             cacheControl: "public, max-age=60"
@@ -92,7 +104,7 @@ export default {
           ok: true,
           features: features.length,
           updatedAt: new Date().toISOString(),
-          objectKey: "organization_map.geojson"
+          objectKey
         }));
       }
 
@@ -162,4 +174,14 @@ function textResponse(s, status = 200) {
 }
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json; charset=utf-8" } });
+}
+
+function getGeoJsonKey(env) {
+  const raw = env.ORG_GEOJSON_FILE;
+  const key = typeof raw === "string" && raw.trim() ? raw.trim() : "organization_map.geojson";
+  return key;
+}
+
+function isSafeKey(key) {
+  return typeof key === "string" && !key.includes("../") && !key.startsWith("/");
 }
