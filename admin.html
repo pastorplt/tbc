@@ -161,23 +161,45 @@
     cancelBtn.addEventListener('click', closeModal);
 
     // ===== POST action =====
-    async function postAdmin(url) {
+    async function postAdmin(url, { button, name } = {}) {
       try {
-        const resp = await fetch(url, {
-          method: "POST",
-          headers: { "Authorization": "Bearer " + REGEN_TOKEN, "Content-Type": "application/json" }
-        });
-        const txt = await resp.text();
-        if (!resp.ok) {
-          console.error("Admin error", resp.status, txt);
-          showToast(`Failed: ${resp.status}`);
+        let payload = null;
+        let totalSeen = 0;
+
+        while (true) {
+          const headers = { Authorization: "Bearer " + REGEN_TOKEN };
+          const body = payload ? JSON.stringify(payload) : null;
+          if (body) headers["Content-Type"] = "application/json";
+
+          const resp = await fetch(url, { method: "POST", headers, body });
+          const txt = await resp.text();
+          if (!resp.ok) {
+            console.error("Admin error", resp.status, txt);
+            showToast(`Failed: ${resp.status}`);
+            return;
+          }
+
+          let data = null;
+          try { data = JSON.parse(txt); } catch { data = null; }
+
+          if (data?.status === "in_progress" && data?.jobId) {
+            totalSeen = data.totalFeatures ?? totalSeen;
+            payload = { jobId: data.jobId };
+            if (data.nextCursor != null) payload.cursor = data.nextCursor;
+            if (button && name) {
+              const label = totalSeen ? `Processing ${name}… (${totalSeen})` : `Processing ${name}…`;
+              button.textContent = label;
+            }
+            continue;
+          }
+
+          if (data?.ok) {
+            const count = data.features ?? data.totalFeatures ?? null;
+            showToast(count != null ? `Success (${count})` : "Success");
+          } else {
+            showToast("Done");
+          }
           return;
-        }
-        try {
-          const data = JSON.parse(txt);
-          showToast(data?.ok ? `Success (${data.features ?? 'ok'})` : "Done");
-        } catch {
-          showToast("Done");
         }
       } catch (e) {
         console.error("Admin exception", e);
@@ -204,7 +226,7 @@
       button.textContent = `Running ${name}…`;
 
       closeModal();
-      await postAdmin(url);
+      await postAdmin(url, { button, name });
 
       // Restore button
       button.disabled = false;
