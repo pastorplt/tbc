@@ -57,126 +57,17 @@ export default {
         const token = (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
         if (!token || token !== env.REGEN_TOKEN) return withCORS(json({ error: "Unauthorized" }, 401));
 
-        const tableName = env.ORG_TABLE_NAME || "Master List";
-        const fieldLat  = env.FIELD_LAT || "Latitude";
-        const fieldLon  = env.FIELD_LON || "Longitude";
-
-        if (!isSafeKey(objectKey)) throw new Error("Invalid GeoJSON file name");
-
-        const MAX_PAGES = clampPages(env.AIRTABLE_PAGE_LIMIT);
         const payload = await readJsonBody(request);
+        const waitForCompletion = payload.waitForCompletion !== false; // default true
+        const isInternalCall = payload._internal === true;
 
-        let jobId = payload.jobId || null;
-        if (!jobId) jobId = (typeof crypto?.randomUUID === "function") ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-
-        const stateKey = `orgs/tmp/${jobId}.json`;
-        const existingState = await readState(env.ORG_MAP_BUCKET, stateKey);
-
-        const state = existingState ?? {
-          jobId,
-          objectKey,
-          tableName,
-          fieldLat,
-          fieldLon,
-          createdAt: new Date().toISOString(),
-          cursor: null,
-          chunkKeys: [],
-          chunkCount: 0,
-          totalFeatures: 0
-        };
-
-        const targetKey = state.objectKey || objectKey;
-        state.objectKey = targetKey;
-        if (!Array.isArray(state.chunkKeys)) state.chunkKeys = [];
-        if (!Number.isFinite(Number(state.chunkCount))) state.chunkCount = state.chunkKeys.length;
-        if (state.cursor === undefined) state.cursor = null;
-        if (!Number.isFinite(Number(state.totalFeatures))) state.totalFeatures = 0;
-
-        // If the request includes a cursor use that, otherwise resume from saved state.
-        const startCursor = payload.cursor != null ? payload.cursor : state.cursor;
-
-        const { records, nextCursor, pagesUsed } = await fetchAirtableChunk(env, tableName, [
-          fieldLat, fieldLon,
-          "Org Name",
-          "Website",
-          "Category",
-          "Denomination",
-          "Org Type",
-          "Address",
-          "County",
-          "Network Name"
-        ], { offset: startCursor || undefined, maxPages: MAX_PAGES });
-
-        const features = recordsToFeatures(records, { fieldLat, fieldLon });
-        const processed = features.length;
-
-        // If there's still more to pull, persist this chunk and return progress.
-        if (nextCursor) {
-          const chunkKey = `orgs/tmp/${jobId}/chunk-${String(state.chunkCount + 1).padStart(4, "0")}.json`;
-          await env.ORG_MAP_BUCKET.put(chunkKey, JSON.stringify(features), {
-            httpMetadata: { contentType: "application/json; charset=utf-8", cacheControl: "no-store" }
-          });
-
-          state.cursor = nextCursor;
-          state.chunkCount += 1;
-          state.chunkKeys.push(chunkKey);
-          state.totalFeatures = (Number(state.totalFeatures) || 0) + processed;
-          state.updatedAt = new Date().toISOString();
-
-          await env.ORG_MAP_BUCKET.put(stateKey, JSON.stringify(state), {
-            httpMetadata: { contentType: "application/json; charset=utf-8", cacheControl: "no-store" }
-          });
-
-          return withCORS(json({
-            ok: true,
-            status: "in_progress",
-            jobId,
-            nextCursor,
-            processed,
-            totalFeatures: state.totalFeatures,
-            pagesUsed,
-            objectKey: targetKey
-          }));
+        // If this is an external call that wants completion, start the chain
+        if (waitForCompletion && !isInternalCall) {
+          return await handleAutoComplete(request, env, token);
         }
 
-        // No more Airtable pages to fetch -> gather any stored chunks and finalize.
-        const allFeatures = [];
-
-        if (state.chunkKeys.length) {
-          for (const key of state.chunkKeys) {
-            const chunkObj = await env.ORG_MAP_BUCKET.get(key);
-            if (chunkObj) {
-              const arr = JSON.parse(await chunkObj.text());
-              if (Array.isArray(arr)) allFeatures.push(...arr);
-              await env.ORG_MAP_BUCKET.delete(key).catch(() => {});
-            }
-          }
-        }
-
-        allFeatures.push(...features);
-
-        const priorCount = Number(state.totalFeatures) || 0;
-        const totalCount = priorCount + processed;
-
-        const fc = JSON.stringify({ type: "FeatureCollection", features: allFeatures });
-
-        await env.ORG_MAP_BUCKET.put(targetKey, fc, {
-          httpMetadata: {
-            contentType: "application/geo+json; charset=utf-8",
-            cacheControl: "public, max-age=60"
-          }
-        });
-
-        await env.ORG_MAP_BUCKET.delete(stateKey).catch(() => {});
-
-        return withCORS(json({
-          ok: true,
-          status: "completed",
-          jobId,
-          features: totalCount,
-          updatedAt: new Date().toISOString(),
-          objectKey: targetKey
-        }));
+        // Otherwise process a single chunk (original behavior)
+        return await processSingleChunk(request, env, objectKey, payload);
       }
 
       if (request.method === "GET" && pathname === "/orgs/ok") {
@@ -189,6 +80,192 @@ export default {
     }
   }
 };
+
+/* ---------------- Auto-complete handler ---------------- */
+
+async function handleAutoComplete(request, env, authToken) {
+  const url = new URL(request.url);
+  let cursor = null;
+  let totalFeatures = 0;
+  let iterations = 0;
+  const maxIterations = 100; // Safety limit (6000 rows / 100 per page / 10 pages = 6 iterations)
+
+  while (iterations < maxIterations) {
+    iterations++;
+    
+    // Call ourselves internally
+    const response = await fetch(url.toString(), {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${authToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        cursor,
+        _internal: true, // Flag to prevent infinite recursion
+        waitForCompletion: false
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Internal call failed: ${response.status} - ${errorText}`);
+    }
+
+    const result = await response.json();
+
+    if (result.status === 'completed') {
+      // Done! Return the final result
+      return withCORS(json({
+        ok: true,
+        status: "completed",
+        jobId: result.jobId,
+        features: result.features,
+        iterations,
+        updatedAt: result.updatedAt,
+        objectKey: result.objectKey
+      }));
+    }
+
+    if (result.status === 'in_progress') {
+      cursor = result.nextCursor;
+      totalFeatures = result.totalFeatures || 0;
+      
+      // Continue to next iteration
+      if (!cursor) {
+        throw new Error("Received in_progress but no cursor");
+      }
+    } else {
+      throw new Error(`Unexpected status: ${result.status}`);
+    }
+  }
+
+  throw new Error(`Max iterations (${maxIterations}) reached. Data may be too large.`);
+}
+
+/* ---------------- Single chunk processor (original logic) ---------------- */
+
+async function processSingleChunk(request, env, objectKey, payload) {
+  const tableName = env.ORG_TABLE_NAME || "Master List";
+  const fieldLat  = env.FIELD_LAT || "Latitude";
+  const fieldLon  = env.FIELD_LON || "Longitude";
+
+  if (!isSafeKey(objectKey)) throw new Error("Invalid GeoJSON file name");
+
+  const MAX_PAGES = clampPages(env.AIRTABLE_PAGE_LIMIT);
+
+  let jobId = payload.jobId || null;
+  if (!jobId) jobId = (typeof crypto?.randomUUID === "function") ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+  const stateKey = `orgs/tmp/${jobId}.json`;
+  const existingState = await readState(env.ORG_MAP_BUCKET, stateKey);
+
+  const state = existingState ?? {
+    jobId,
+    objectKey,
+    tableName,
+    fieldLat,
+    fieldLon,
+    createdAt: new Date().toISOString(),
+    cursor: null,
+    chunkKeys: [],
+    chunkCount: 0,
+    totalFeatures: 0
+  };
+
+  const targetKey = state.objectKey || objectKey;
+  state.objectKey = targetKey;
+  if (!Array.isArray(state.chunkKeys)) state.chunkKeys = [];
+  if (!Number.isFinite(Number(state.chunkCount))) state.chunkCount = state.chunkKeys.length;
+  if (state.cursor === undefined) state.cursor = null;
+  if (!Number.isFinite(Number(state.totalFeatures))) state.totalFeatures = 0;
+
+  // If the request includes a cursor use that, otherwise resume from saved state.
+  const startCursor = payload.cursor != null ? payload.cursor : state.cursor;
+
+  const { records, nextCursor, pagesUsed } = await fetchAirtableChunk(env, tableName, [
+    fieldLat, fieldLon,
+    "Org Name",
+    "Website",
+    "Category",
+    "Denomination",
+    "Org Type",
+    "Address",
+    "County",
+    "Network Name"
+  ], { offset: startCursor || undefined, maxPages: MAX_PAGES });
+
+  const features = recordsToFeatures(records, { fieldLat, fieldLon });
+  const processed = features.length;
+
+  // If there's still more to pull, persist this chunk and return progress.
+  if (nextCursor) {
+    const chunkKey = `orgs/tmp/${jobId}/chunk-${String(state.chunkCount + 1).padStart(4, "0")}.json`;
+    await env.ORG_MAP_BUCKET.put(chunkKey, JSON.stringify(features), {
+      httpMetadata: { contentType: "application/json; charset=utf-8", cacheControl: "no-store" }
+    });
+
+    state.cursor = nextCursor;
+    state.chunkCount += 1;
+    state.chunkKeys.push(chunkKey);
+    state.totalFeatures = (Number(state.totalFeatures) || 0) + processed;
+    state.updatedAt = new Date().toISOString();
+
+    await env.ORG_MAP_BUCKET.put(stateKey, JSON.stringify(state), {
+      httpMetadata: { contentType: "application/json; charset=utf-8", cacheControl: "no-store" }
+    });
+
+    return withCORS(json({
+      ok: true,
+      status: "in_progress",
+      jobId,
+      nextCursor,
+      processed,
+      totalFeatures: state.totalFeatures,
+      pagesUsed,
+      objectKey: targetKey
+    }));
+  }
+
+  // No more Airtable pages to fetch -> gather any stored chunks and finalize.
+  const allFeatures = [];
+
+  if (state.chunkKeys.length) {
+    for (const key of state.chunkKeys) {
+      const chunkObj = await env.ORG_MAP_BUCKET.get(key);
+      if (chunkObj) {
+        const arr = JSON.parse(await chunkObj.text());
+        if (Array.isArray(arr)) allFeatures.push(...arr);
+        await env.ORG_MAP_BUCKET.delete(key).catch(() => {});
+      }
+    }
+  }
+
+  allFeatures.push(...features);
+
+  const priorCount = Number(state.totalFeatures) || 0;
+  const totalCount = priorCount + processed;
+
+  const fc = JSON.stringify({ type: "FeatureCollection", features: allFeatures });
+
+  await env.ORG_MAP_BUCKET.put(targetKey, fc, {
+    httpMetadata: {
+      contentType: "application/geo+json; charset=utf-8",
+      cacheControl: "public, max-age=60"
+    }
+  });
+
+  await env.ORG_MAP_BUCKET.delete(stateKey).catch(() => {});
+
+  return withCORS(json({
+    ok: true,
+    status: "completed",
+    jobId,
+    features: totalCount,
+    updatedAt: new Date().toISOString(),
+    objectKey: targetKey
+  }));
+}
 
 /* ---------------- Airtable helpers ---------------- */
 
