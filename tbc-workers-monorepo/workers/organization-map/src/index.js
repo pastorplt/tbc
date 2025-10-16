@@ -11,6 +11,7 @@
 //   ORG_GEOJSON_FILE (default "organization_map.geojson")
 //   FIELD_LAT (default "Latitude"), FIELD_LON (default "Longitude")
 //   (optional) AIRTABLE_VIEW_NAME
+//   (optional) AIRTABLE_PAGE_LIMIT (default 10 pages per request)
 //
 // R2 binding (Settings → Bindings → R2):
 //   ORG_MAP_BUCKET  -> your bucket (object key: configurable via ORG_GEOJSON_FILE)
@@ -60,8 +61,41 @@ export default {
         const fieldLat  = env.FIELD_LAT || "Latitude";
         const fieldLon  = env.FIELD_LON || "Longitude";
 
-        // Pull only the columns we need (plus lat/lon)
-        const records = await fetchAllAirtableRecords(env, tableName, [
+        if (!isSafeKey(objectKey)) throw new Error("Invalid GeoJSON file name");
+
+        const MAX_PAGES = clampPages(env.AIRTABLE_PAGE_LIMIT);
+        const payload = await readJsonBody(request);
+
+        let jobId = payload.jobId || null;
+        if (!jobId) jobId = (typeof crypto?.randomUUID === "function") ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+        const stateKey = `orgs/tmp/${jobId}.json`;
+        const existingState = await readState(env.ORG_MAP_BUCKET, stateKey);
+
+        const state = existingState ?? {
+          jobId,
+          objectKey,
+          tableName,
+          fieldLat,
+          fieldLon,
+          createdAt: new Date().toISOString(),
+          cursor: null,
+          chunkKeys: [],
+          chunkCount: 0,
+          totalFeatures: 0
+        };
+
+        const targetKey = state.objectKey || objectKey;
+        state.objectKey = targetKey;
+        if (!Array.isArray(state.chunkKeys)) state.chunkKeys = [];
+        if (!Number.isFinite(Number(state.chunkCount))) state.chunkCount = state.chunkKeys.length;
+        if (state.cursor === undefined) state.cursor = null;
+        if (!Number.isFinite(Number(state.totalFeatures))) state.totalFeatures = 0;
+
+        // If the request includes a cursor use that, otherwise resume from saved state.
+        const startCursor = payload.cursor != null ? payload.cursor : state.cursor;
+
+        const { records, nextCursor, pagesUsed } = await fetchAirtableChunk(env, tableName, [
           fieldLat, fieldLon,
           "Org Name",
           "Website",
@@ -71,48 +105,77 @@ export default {
           "Address",
           "County",
           "Network Name"
-        ]);
+        ], { offset: startCursor || undefined, maxPages: MAX_PAGES });
 
-        const features = [];
-        for (const r of records) {
-          const f = r.fields || {};
-          const lat = toNum(f[fieldLat]);
-          const lon = toNum(f[fieldLon]);
-          if (!isFinite(lat) || !isFinite(lon)) continue;
+        const features = recordsToFeatures(records, { fieldLat, fieldLon });
+        const processed = features.length;
 
-          features.push({
-            type: "Feature",
-            geometry: { type: "Point", coordinates: [lon, lat] }, // [lon, lat]
-            properties: {
-              id: r.id,
-              organization_name: normalizeValue(f["Org Name"]),
-              website:           normalizeValue(f["Website"]),
-              category:          normalizeValue(f["Category"]),
-              denomination:      normalizeValue(f["Denomination"]),
-              organization_type: normalizeValue(f["Org Type"]),
-              full_address:      normalizeValue(f["Address"]),
-              county:            normalizeValue(f["County"]),
-              network_name:      normalizeValue(f["Network Name"])
-            }
+        // If there's still more to pull, persist this chunk and return progress.
+        if (nextCursor) {
+          const chunkKey = `orgs/tmp/${jobId}/chunk-${String(state.chunkCount + 1).padStart(4, "0")}.json`;
+          await env.ORG_MAP_BUCKET.put(chunkKey, JSON.stringify(features), {
+            httpMetadata: { contentType: "application/json; charset=utf-8", cacheControl: "no-store" }
           });
+
+          state.cursor = nextCursor;
+          state.chunkCount += 1;
+          state.chunkKeys.push(chunkKey);
+          state.totalFeatures = (Number(state.totalFeatures) || 0) + processed;
+          state.updatedAt = new Date().toISOString();
+
+          await env.ORG_MAP_BUCKET.put(stateKey, JSON.stringify(state), {
+            httpMetadata: { contentType: "application/json; charset=utf-8", cacheControl: "no-store" }
+          });
+
+          return withCORS(json({
+            ok: true,
+            status: "in_progress",
+            jobId,
+            nextCursor,
+            processed,
+            totalFeatures: state.totalFeatures,
+            pagesUsed,
+            objectKey: targetKey
+          }));
         }
 
-        const fc = JSON.stringify({ type: "FeatureCollection", features });
+        // No more Airtable pages to fetch -> gather any stored chunks and finalize.
+        const allFeatures = [];
 
-        if (!isSafeKey(objectKey)) throw new Error("Invalid GeoJSON file name");
+        if (state.chunkKeys.length) {
+          for (const key of state.chunkKeys) {
+            const chunkObj = await env.ORG_MAP_BUCKET.get(key);
+            if (chunkObj) {
+              const arr = JSON.parse(await chunkObj.text());
+              if (Array.isArray(arr)) allFeatures.push(...arr);
+              await env.ORG_MAP_BUCKET.delete(key).catch(() => {});
+            }
+          }
+        }
 
-        await env.ORG_MAP_BUCKET.put(objectKey, fc, {
+        allFeatures.push(...features);
+
+        const priorCount = Number(state.totalFeatures) || 0;
+        const totalCount = priorCount + processed;
+
+        const fc = JSON.stringify({ type: "FeatureCollection", features: allFeatures });
+
+        await env.ORG_MAP_BUCKET.put(targetKey, fc, {
           httpMetadata: {
             contentType: "application/geo+json; charset=utf-8",
             cacheControl: "public, max-age=60"
           }
         });
 
+        await env.ORG_MAP_BUCKET.delete(stateKey).catch(() => {});
+
         return withCORS(json({
           ok: true,
-          features: features.length,
+          status: "completed",
+          jobId,
+          features: totalCount,
           updatedAt: new Date().toISOString(),
-          objectKey
+          objectKey: targetKey
         }));
       }
 
@@ -129,7 +192,7 @@ export default {
 
 /* ---------------- Airtable helpers ---------------- */
 
-async function fetchAllAirtableRecords(env, tableName, fields = []) {
+async function fetchAirtableChunk(env, tableName, fields = [], { offset, maxPages }) {
   const base = env.AIRTABLE_BASE_ID;
   const key  = env.AIRTABLE_TOKEN;
   const api  = new URL(`https://api.airtable.com/v0/${base}/${encodeURIComponent(tableName)}`);
@@ -138,20 +201,30 @@ async function fetchAllAirtableRecords(env, tableName, fields = []) {
   if (env.AIRTABLE_VIEW_NAME) api.searchParams.set("view", env.AIRTABLE_VIEW_NAME);
   for (const f of fields) if (f) api.searchParams.append("fields[]", f);
 
-  const out = [];
-  let offset;
-  while (true) {
+  const records = [];
+  let nextOffset = offset;
+  let pagesUsed = 0;
+
+  while (pagesUsed < maxPages) {
     const url = new URL(api);
-    if (offset) url.searchParams.set("offset", offset);
+    if (nextOffset) url.searchParams.set("offset", nextOffset);
 
     const resp = await fetch(url, { headers: { Authorization: `Bearer ${key}` } });
+    pagesUsed += 1;
     if (!resp.ok) throw new Error(`Airtable error ${resp.status}: ${await resp.text()}`);
-    const data = await resp.json();
 
-    if (data.records?.length) out.push(...data.records);
-    if (data.offset) offset = data.offset; else break;
+    const data = await resp.json();
+    if (Array.isArray(data.records) && data.records.length) records.push(...data.records);
+
+    if (data.offset) {
+      nextOffset = data.offset;
+    } else {
+      nextOffset = null;
+      break;
+    }
   }
-  return out;
+
+  return { records, nextCursor: nextOffset, pagesUsed };
 }
 
 /* ---------------- small utils ---------------- */
@@ -211,4 +284,59 @@ async function listAllGeoJson(bucket) {
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
   return files;
+}
+
+async function readJsonBody(request) {
+  try {
+    const contentType = request.headers.get("Content-Type") || "";
+    if (!contentType.includes("application/json")) return {};
+    const text = await request.text();
+    if (!text) return {};
+    return JSON.parse(text);
+  } catch {
+    return {};
+  }
+}
+
+async function readState(bucket, key) {
+  const obj = await bucket.get(key);
+  if (!obj) return null;
+  try {
+    return JSON.parse(await obj.text());
+  } catch {
+    return null;
+  }
+}
+
+function clampPages(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 10;
+  return Math.min(20, Math.max(1, Math.floor(n)));
+}
+
+function recordsToFeatures(records, { fieldLat, fieldLon }) {
+  const features = [];
+  for (const r of records) {
+    const f = r?.fields || {};
+    const lat = toNum(f[fieldLat]);
+    const lon = toNum(f[fieldLon]);
+    if (!isFinite(lat) || !isFinite(lon)) continue;
+
+    features.push({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [lon, lat] },
+      properties: {
+        id: r.id,
+        organization_name: normalizeValue(f["Org Name"]),
+        website:           normalizeValue(f["Website"]),
+        category:          normalizeValue(f["Category"]),
+        denomination:      normalizeValue(f["Denomination"]),
+        organization_type: normalizeValue(f["Org Type"]),
+        full_address:      normalizeValue(f["Address"]),
+        county:            normalizeValue(f["County"]),
+        network_name:      normalizeValue(f["Network Name"])
+      }
+    });
+  }
+  return features;
 }
