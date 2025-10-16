@@ -5,7 +5,7 @@ workers_dev = false
 keep_vars = true
 
 [[routes]]
-pattern = "api.tbc.city/orgs/*"
+pattern = "api.tbc.city/orgs*"
 zone_name = "tbc.city" 
 
 [[r2_buckets]]
