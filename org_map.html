@@ -177,7 +177,7 @@
       <div class="legend-title desktop-only">Filters</div>
 
       <div class="dataset-selector" id="datasetSelector" hidden>
-        <div class="dataset-title">GeoJSON layers</div>
+        <div class="dataset-title">Organization data</div>
         <div id="datasetOptions" class="dataset-options"></div>
         <div id="datasetStatus" class="dataset-status"></div>
       </div>
@@ -325,8 +325,15 @@
 
     function datasetDisplayName(key) {
       if (!key || typeof key !== "string") return "GeoJSON";
+      const normalizedKey = key.trim().toLowerCase();
+      if (normalizedKey === DEFAULT_GEOJSON_KEY.toLowerCase()) return "TBC Data";
+
       const base = key.replace(/\.geojson$/i, "").replace(/[_-]+/g, " ").trim();
       if (!base) return key;
+
+      const normalizedBase = base.toLowerCase();
+      if (normalizedBase === "ecc" || normalizedBase === "ecc data") return "ECC Data";
+
       return base.replace(/\b\w/g, (c) => c.toUpperCase());
     }
 
@@ -718,25 +725,8 @@
       }
     }
 
-    async function checkAuthStatus() {
-      try {
-        const resp = await fetch('/auth/status', { credentials: 'include', cache: 'no-store' });
-        if (!resp.ok) return false;
-        const data = await resp.json();
-        return !!data?.authenticated;
-      } catch (err) {
-        return false;
-      }
-    }
-
     async function initializeDatasets() {
       try {
-        const authed = await checkAuthStatus();
-        if (!authed) {
-          await loadDefaultDataset();
-          return;
-        }
-
         if (datasetSelectorEl) datasetSelectorEl.hidden = false;
 
         let files = [];
