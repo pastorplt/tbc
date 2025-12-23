@@ -181,6 +181,7 @@ async function fetchAllAirtableRecords(env, tableName, fields = []) {
   const api  = new URL(`https://api.airtable.com/v0/${base}/${encodeURIComponent(tableName)}`);
 
   api.searchParams.set("pageSize", "100");
+  api.searchParams.set("cellFormat", "string"); // <--- ADD THIS LINE
   if (env.AIRTABLE_VIEW_NAME) api.searchParams.set("view", env.AIRTABLE_VIEW_NAME);
   for (const f of fields) if (f) api.searchParams.append("fields[]", f);
 
