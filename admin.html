@@ -26,6 +26,10 @@
       font-weight: 800;
       letter-spacing: .2px;
     }
+    h2 {
+      font-size: 20px;
+      margin: 0 0 12px;
+    }
     .card {
       background: #fff;
       border: 1px solid #e5e7eb;
@@ -45,6 +49,7 @@
       background: #fff;
       cursor: pointer;
       transition: background .15s, transform .02s;
+      text-align: center;
     }
     .btn:hover { background: #f3f4f6; }
     .btn:active { transform: translateY(1px); }
@@ -73,6 +78,7 @@
       border: 1px solid #d1d5db;
       font-size: 15px;
       margin-bottom: 10px;
+      box-sizing: border-box; /* Fix width issues */
     }
     input[type="text"]:focus {
       outline: 2px solid rgba(191,52,38,.35);
@@ -143,29 +149,46 @@
     }
     .btn-danger:hover { filter: brightness(0.92); }
     .btn-ghost { background:#fff; }
+    
+    /* Section dividers */
+    .section-label {
+        font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; 
+        color: #6b7280; font-weight: 700; margin: 16px 0 8px;
+    }
   </style>
 </head>
 <body>
-  <!-- Shared navbar   -->
   <div id="navbar-include"></div>
   <script src="include-nav.js" defer></script>
 
   <main>
     <h1>Admin Console</h1>
+    
     <div class="card" role="group" aria-label="Regeneration tasks">
+      <h2>Data Regeneration</h2>
+      <p style="margin:0 0 16px;font-size:14px;color:#4b5563;">Trigger Cloudflare Workers to fetch fresh data from Airtable and update the JSON files.</p>
+
+      <div class="section-label">Disaster & Resources</div>
+      <button class="btn admin-action" data-name="Sonoma Disaster Data" data-url="https://api.tbc.city/disaster/admin/regenerate">
+        Regen Disaster Data (Org Points)
+      </button>
+      
+      <button class="btn admin-action" data-name="Resource Data" data-url="https://api.tbc.city/disaster/admin/regenerate-resources">
+        Regen Resource Data
+      </button>
+
+      <div class="section-label">Other Datasets</div>
       <button class="btn admin-action" data-name="Networks" data-url="https://api.tbc.city/networks/admin/regenerate">Regen Networks</button>
-      <button class="btn admin-action" data-name="Disaster Data" data-url="https://api.tbc.city/disaster/admin/regenerate">Regen Disaster</button>
       <button class="btn admin-action" data-name="Organizations" data-url="https://api.tbc.city/orgs/admin/regenerate">Regen Orgs</button>
     </div>
 
     <div class="card" aria-label="Organization datasets">
-      <h2 style="margin:0 0 12px;font-size:20px;">Organization GeoJSON datasets</h2>
+      <h2>Organization GeoJSON datasets</h2>
       <p style="margin:0 0 16px;font-size:14px;color:#4b5563;">Delete old or test datasets from the organization map bucket.</p>
       <button class="btn btn-danger" id="deleteOrgBtn">Delete GeoJSON…</button>
     </div>
   </main>
 
-  <!-- Confirm modal -->
   <div id="confirmBackdrop" class="modal-backdrop" aria-hidden="true"></div>
   <div id="confirmModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmDesc">
     <header id="confirmTitle">Run task?</header>
@@ -178,7 +201,6 @@
     </div>
   </div>
 
-  <!-- Delete modal -->
   <div id="deleteBackdrop" class="modal-backdrop" aria-hidden="true"></div>
   <div id="deleteModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="deleteTitle" aria-describedby="deleteDesc">
     <header id="deleteTitle">Delete organization GeoJSON</header>
