@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quick Prayer Input</title>
+    <style>
+        body { font-family: -apple-system, sans-serif; padding: 20px; background: #f4f7f6; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        input, textarea, button { width: 100%; margin-top: 10px; padding: 12px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 16px; }
+        button { background: #4a90e2; color: white; border: none; font-weight: bold; margin-top: 20px; }
+        label { font-weight: bold; color: #333; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <label>Who sent the request?</label>
+    <input list="leadersList" id="leaderInput" placeholder="Start typing a name...">
+    <datalist id="leadersList"></datalist>
+
+    <label style="display:block; margin-top:20px;">The Prayer Request</label>
+    <textarea id="requestText" rows="5" placeholder="Paste the text message here..."></textarea>
+
+    <button id="submitBtn">Save Prayer Request</button>
+</div>
+
+<script>
+    let leaderMap = [];
+    const WORKER_URL = "https://your-worker-url.workers.dev"; // Replace with your worker URL
+
+    // 1. Load Leaders for Autocomplete
+    async function loadLeaders() {
+        const res = await fetch(`${WORKER_URL}/get-leaders`);
+        leaderMap = await res.json();
+        const list = document.getElementById('leadersList');
+        leaderMap.forEach(l => {
+            let opt = document.createElement('option');
+            opt.value = l.name;
+            list.appendChild(opt);
+        });
+    }
+
+    // 2. Submit Logic
+    document.getElementById('submitBtn').addEventListener('click', async () => {
+        const name = document.getElementById('leaderInput').value;
+        const text = document.getElementById('requestText').value;
+        const leader = leaderMap.find(l => l.name === name);
+
+        if (!leader || !text) return alert("Please select a name and enter a request.");
+
+        document.getElementById('submitBtn').innerText = "Saving...";
+        
+        await fetch(`${WORKER_URL}/submit-prayer`, {
+            method: "POST",
+            body: JSON.stringify({ leaderId: leader.id, text: text })
+        });
+
+        alert("Saved to Airtable!");
+        document.getElementById('leaderInput').value = "";
+        document.getElementById('requestText').value = "";
+        document.getElementById('submitBtn').innerText = "Save Prayer Request";
+    });
+
+    loadLeaders();
+</script>
+</body>
+</html>
