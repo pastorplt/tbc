@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Add Prayer Request</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; max-width: 500px; margin: auto; }
+        input, textarea, button { width: 100%; margin-bottom: 15px; padding: 10px; box-sizing: border-box; }
+        button { background: #007bff; color: white; border: none; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h2>New Prayer Request</h2>
+    <label>Leader Name:</label>
+    <input list="leaders" id="leaderSearch" placeholder="Type to search...">
+    <datalist id="leaders"></datalist>
+
+    <label>Prayer Request (Paste Text):</label>
+    <textarea id="requestText" rows="6"></textarea>
+
+    <button id="submitBtn">Save Request</button>
+
+    <script>
+        const API_URL = "https://prayer-app-api.tbc.workers.dev"; // Replace with your actual worker URL
+        let leaders = [];
+
+        async function init() {
+            const res = await fetch(`${API_URL}/get-leaders`);
+            leaders = await res.json();
+            const list = document.getElementById('leaders');
+            leaders.forEach(l => {
+                const opt = document.createElement('option');
+                opt.value = l.name;
+                list.appendChild(opt);
+            });
+        }
+
+        document.getElementById('submitBtn').onclick = async () => {
+            const name = document.getElementById('leaderSearch').value;
+            const text = document.getElementById('requestText').value;
+            const leader = leaders.find(l => l.name === name);
+
+            if (!leader || !text) return alert("Select a valid leader and enter text.");
+
+            await fetch(`${API_URL}/submit-prayer`, {
+                method: "POST",
+                body: JSON.stringify({ leaderId: leader.id, text: text })
+            });
+            alert("Saved!");
+            location.reload();
+        };
+
+        init();
+    </script>
+</body>
+</html>
