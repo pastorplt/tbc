@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prayer Session</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; padding: 50px 20px; }
+        .card { border: 1px solid #ddd; padding: 20px; border-radius: 10px; max-width: 400px; margin: auto; }
+        button { background: #28a745; color: white; padding: 15px 30px; border: none; border-radius: 5px; font-size: 1.2em; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2 id="name">Loading...</h2>
+        <p id="request" style="font-style: italic; margin: 20px 0;"></p>
+        <button id="doneBtn">I Prayed for This</button>
+    </div>
+
+    <script>
+        const API_URL = "https://prayer-app-api.tbc.workers.dev";
+        let currentId = null;
+
+        async function loadNext() {
+            const res = await fetch(`${API_URL}/get-prayer`);
+            const data = await res.json();
+            if (data.empty) {
+                document.getElementById('name').innerText = "All Done!";
+                document.getElementById('request').innerText = "No active prayer requests found.";
+                document.getElementById('doneBtn').style.display = "none";
+                return;
+            }
+            currentId = data.id;
+            document.getElementById('name').innerText = data.name;
+            document.getElementById('request').innerText = `"${data.text}"`;
+        }
+
+        document.getElementById('doneBtn').onclick = async () => {
+            await fetch(`${API_URL}/log-prayer`, {
+                method: "POST",
+                body: JSON.stringify({ prayerRequestId: currentId })
+            });
+            loadNext();
+        };
+
+        loadNext();
+    </script>
+</body>
+</html>
