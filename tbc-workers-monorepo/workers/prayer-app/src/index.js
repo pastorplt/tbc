@@ -50,14 +50,33 @@ export default {
         return new Response(JSON.stringify({ status: "Saved" }), { headers });
       }
 
-      // 3. Get a Random Active Prayer
+            // 3. Get a Random Active Prayer with Filtering
       if (url.pathname === "/get-prayer") {
-        const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(PRAYER_REQUESTS_TABLE)}?filterByFormula=AND({Status}='Active')`, {
+        const filterType = url.searchParams.get('filter') || 'unprayed-today';
+        let formula = "AND({Status}='Active')";
+
+        if (filterType === 'unprayed-today') {
+          // Last Prayed is empty OR earlier than today
+          formula = `AND({Status}='Active', OR({Last Prayed}=BLANK(), DATETIME_DIFF(NOW(), {Last Prayed}, 'days') >= 1))`;
+        } else if (filterType === 'unprayed-week') {
+          // Last Prayed is empty OR earlier than 7 days ago
+          formula = `AND({Status}='Active', OR({Last Prayed}=BLANK(), DATETIME_DIFF(NOW(), {Last Prayed}, 'days') >= 7))`;
+        } else if (filterType === 'past-month') {
+          // Submitted (Created) within the last 30 days
+          formula = `AND({Status}='Active', DATETIME_DIFF(NOW(), CREATED_TIME(), 'days') <= 30)`;
+        } else if (filterType === 'anytime') {
+          // Just active
+          formula = "AND({Status}='Active')";
+        }
+
+        const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(PRAYER_REQUESTS_TABLE)}?filterByFormula=${encodeURIComponent(formula)}`, {
           headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` }
         });
         const data = await res.json();
+        
         if (!data.records || !data.records.length) return new Response(JSON.stringify({ empty: true }), { headers });
         const randomRecord = data.records[Math.floor(Math.random() * data.records.length)];
+        
         return new Response(JSON.stringify({
           id: randomRecord.id,
           text: randomRecord.fields["Request Text"],
