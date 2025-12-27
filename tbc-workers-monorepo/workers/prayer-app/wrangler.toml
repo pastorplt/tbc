@@ -7,5 +7,5 @@ keep_vars = true
 [vars]
 AIRTABLE_BASE_ID = "app1TcNtvts4fkqdm"
 LEADERS_TABLE_NAME = "Leaders"
-PRAYER_REQUESTS_TABLE = "Prayer Requests"
+PRAYER_REQUESTS_TABLE = "Personal Prayer Requests"
 PRAYER_LOGS_TABLE = "Prayer Logs"
