@@ -3,7 +3,6 @@ export default {
     const { AIRTABLE_API_KEY, AIRTABLE_BASE_ID } = env;
     const url = new URL(request.url);
     
-    // Standard headers for all responses to fix CORS and display issues
     const headers = { 
       "Content-Type": "application/json", 
       "Access-Control-Allow-Origin": "*",
@@ -11,7 +10,6 @@ export default {
       "Access-Control-Allow-Headers": "Content-Type"
     };
 
-    // Handle Browser Pre-flight (CORS fix)
     if (request.method === "OPTIONS") return new Response(null, { headers });
 
     try {
@@ -19,32 +17,16 @@ export default {
       if (url.pathname === "/get-leaders") {
         let allLeaders = [];
         let offset = "";
-        
         do {
           const fetchUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Leaders?fields%5B%5D=Leader%20Name${offset ? `&offset=${offset}` : ""}`;
-          const res = await fetch(fetchUrl, {
-            headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` }
-          });
-          
+          const res = await fetch(fetchUrl, { headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` } });
           const data = await res.json();
-          
-          // Safety check: if Airtable returns an error (e.g., 401 or 404), throw it to the catch block
-          if (data.error) {
-            throw new Error(`Airtable Error: ${data.error.message || data.error}`);
-          }
-
-          // Safely map records if they exist; prevents the "map of undefined" error
+          if (data.error) throw new Error(`Airtable Error: ${data.error.message || data.error}`);
           if (data.records) {
-            const pageLeaders = data.records.map(r => ({ 
-              id: r.id, 
-              name: r.fields["Leader Name"] || "Unknown" 
-            }));
-            allLeaders = allLeaders.concat(pageLeaders);
+            allLeaders = allLeaders.concat(data.records.map(r => ({ id: r.id, name: r.fields["Leader Name"] || "Unknown" })));
           }
-          
-          offset = data.offset; // Airtable provides an offset if there are more than 100 records
+          offset = data.offset;
         } while (offset);
-
         return new Response(JSON.stringify(allLeaders), { headers });
       }
 
@@ -54,11 +36,9 @@ export default {
         const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Prayer%20Requests`, {
           method: "POST",
           headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            records: [{ fields: { "Leader": [body.leaderId], "Request Text": body.text, "Status": "Active" } }]
-          })
+          body: JSON.stringify({ records: [{ fields: { "Leader": [body.leaderId], "Request Text": body.text, "Status": "Active" } }] })
         });
-        if (!res.ok) throw new Error(`Airtable save error: ${res.statusText}`);
+        if (!res.ok) throw new Error(`Airtable Save error: ${res.statusText}`);
         return new Response(JSON.stringify({ status: "Saved" }), { headers });
       }
 
@@ -68,24 +48,44 @@ export default {
           headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` }
         });
         const data = await res.json();
-        
-        if (!data.records || !data.records.length) {
-          return new Response(JSON.stringify({ empty: true }), { headers });
-        }
-        
+        if (!data.records || !data.records.length) return new Response(JSON.stringify({ empty: true }), { headers });
         const randomRecord = data.records[Math.floor(Math.random() * data.records.length)];
         return new Response(JSON.stringify({
           id: randomRecord.id,
           text: randomRecord.fields["Request Text"],
-          name: randomRecord.fields["Leader Name"] // Assumes a lookup field exists in Airtable
+          name: randomRecord.fields["Leader Name"]
         }), { headers });
       }
 
+      // 4. Log a completed prayer (CRITICAL FOR index.html)
+      if (url.pathname === "/log-prayer" && request.method === "POST") {
+        const body = await request.json();
+        const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Prayer%20Logs`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ records: [{ fields: { "Prayer Request": [body.prayerRequestId] } }] })
+        });
+        if (!res.ok) throw new Error(`Airtable Log error: ${res.statusText}`);
+        return new Response(JSON.stringify({ success: true }), { headers });
+      }
+
+      // 5. Get History (CRITICAL FOR history.html)
+      if (url.pathname === "/get-history") {
+        const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Prayer%20Logs?maxRecords=20&sort%5B0%5D%5Bfield%5D=Date&sort%5B0%5D%5Bdirection%5D=desc`, {
+          headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` }
+        });
+        const data = await res.json();
+        const history = data.records.map(r => ({
+          date: new Date(r.fields["Date"]).toLocaleString(),
+          leader: r.fields["Leader Name"] ? r.fields["Leader Name"][0] : "Unknown",
+          request: r.fields["Request Text"] ? r.fields["Request Text"][0] : "No text"
+        }));
+        return new Response(JSON.stringify(history), { headers });
+      }
+
     } catch (err) {
-      // Returns a JSON error message to the browser console for debugging
       return new Response(JSON.stringify({ error: err.message }), { status: 500, headers });
     }
-    
     return new Response(JSON.stringify({ error: "Not Found" }), { status: 404, headers });
   }
 };
