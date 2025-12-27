@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prayer History</title>
+    <style>
+        body { font-family: -apple-system, sans-serif; padding: 20px; max-width: 600px; margin: auto; background: #f9f9f9; }
+        .log-item { background: white; padding: 15px; margin-bottom: 10px; border-radius: 8px; border-left: 5px solid #28a745; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .date { font-size: 0.8em; color: #888; }
+        .leader { font-weight: bold; color: #1a1a1a; display: block; margin: 5px 0; }
+        .request { color: #555; font-style: italic; font-size: 0.95em; }
+        .back-link { display: inline-block; margin-bottom: 20px; color: #007bff; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <a href="./index.html" class="back-link">← Back to Praying</a>
+    <h1>Recent Prayers</h1>
+    <div id="historyList">Loading history...</div>
+    <script>
+        const API_URL = "https://prayer-app-api.tbc.workers.dev"; // Confirm this URL
+        async function loadHistory() {
+            try {
+                const res = await fetch(`${API_URL}/get-history`);
+                const data = await res.json();
+                document.getElementById('historyList').innerHTML = data.map(item => `
+                    <div class="log-item">
+                        <span class="date">${item.date}</span>
+                        <span class="leader">${item.leader}</span>
+                        <div class="request">"${item.request}"</div>
+                    </div>
+                `).join('');
+            } catch (err) { document.getElementById('historyList').innerText = "Error loading history."; }
+        }
+        loadHistory();
+    </script>
+</body>
+</html>
