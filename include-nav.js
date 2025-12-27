@@ -25,7 +25,7 @@ const NAVBAR_CONFIG = {
   var config = NAVBAR_CONFIG[hostname] || NAVBAR_CONFIG['default'];
 
   // bump to defeat caches when updating
-  var VERSION = '2025-09-11-1';
+  var VERSION = '2025-12-27-1';
 
   fetch('/navbar.html?v=' + encodeURIComponent(VERSION), { cache: 'no-cache' })
     .then(function(r){ return r.text(); })
@@ -55,7 +55,11 @@ const NAVBAR_CONFIG = {
         'organizations.html': 'a[href="organizations.html"]',
         'leaders.html': 'a[href="leaders.html"]',
         'networks.html': 'a[href="networks.html"]',
-        'network_prayer_request.html': 'a[href="/network_prayer_request.html"]'
+        'network_prayer_request.html': 'a[href="/network_prayer_request.html"]',
+        // Prayer App Mappings
+        'input.html': 'a[href="/prayer/input.html"]',
+        'index.html': 'a[href="/prayer/index.html"]',
+        'history.html': 'a[href="/prayer/history.html"]'
       };
 
       var sel = map[file];
@@ -67,6 +71,7 @@ const NAVBAR_CONFIG = {
         }
       }
 
+      // Highlight Maps parent
       var mapsFiles = ['network_map.html', 'org_map.html', 'disaster_data.html'];
       if (mapsFiles.indexOf(file) !== -1) {
         var mapsDropdown = findDropdownByLabel(mount, 'Maps');
@@ -76,13 +81,23 @@ const NAVBAR_CONFIG = {
         }
       }
 
-      // Highlight Team parent for known team pages
+      // Highlight Team parent
       var teamFiles = ['organizations.html','leaders.html','networks.html','touchpoint.html'];
       if (teamFiles.indexOf(file) !== -1) {
         var teamDropdown = findDropdownByLabel(mount, 'Team');
         if (teamDropdown) {
           var toggle2 = teamDropdown.querySelector('.dropdown-toggle');
           if (toggle2) toggle2.classList.add('active');
+        }
+      }
+
+      // Highlight Personal Prayer parent
+      var prayerFiles = ['input.html', 'index.html', 'history.html'];
+      if (prayerFiles.indexOf(file) !== -1 && location.pathname.includes('/prayer/')) {
+        var prayerDropdown = findDropdownByLabel(mount, 'Personal Prayer');
+        if (prayerDropdown) {
+          var toggle3 = prayerDropdown.querySelector('.dropdown-toggle');
+          if (toggle3) toggle3.classList.add('active');
         }
       }
 
@@ -120,14 +135,16 @@ const NAVBAR_CONFIG = {
     }
   }
 
-  // Check auth status and toggle Team + Sign in/out links
+  // Check auth status and toggle Dropdowns + Sign in/out links
   function initAuthVisibility(mount) {
     var teamDropdown = findDropdownByLabel(mount, 'Team');
+    var prayerDropdown = findDropdownByLabel(mount, 'Personal Prayer');
     var signin = mount.querySelector('#signin-link');
     var signout = mount.querySelector('#signout-link');
 
     // Default to logged-out view
     if (teamDropdown) hideElement(teamDropdown);
+    if (prayerDropdown) hideElement(prayerDropdown);
     if (signout) hideElement(signout);
     if (signin) showElement(signin);
 
@@ -138,10 +155,12 @@ const NAVBAR_CONFIG = {
         var authed = !!(data && data.authenticated);
         if (authed) {
           if (teamDropdown) showElement(teamDropdown);
+          if (prayerDropdown) showElement(prayerDropdown);
           if (signout) showElement(signout);
           if (signin) hideElement(signin);
         } else {
           if (teamDropdown) hideElement(teamDropdown);
+          if (prayerDropdown) hideElement(prayerDropdown);
           if (signout) hideElement(signout);
           if (signin) showElement(signin);
         }
