@@ -2,6 +2,8 @@ export default {
   async fetch(request, env) {
     const { AIRTABLE_API_KEY, AIRTABLE_BASE_ID } = env;
     const url = new URL(request.url);
+    
+    // Standard headers for all responses to fix CORS and display issues
     const headers = { 
       "Content-Type": "application/json", 
       "Access-Control-Allow-Origin": "*",
@@ -9,6 +11,7 @@ export default {
       "Access-Control-Allow-Headers": "Content-Type"
     };
 
+    // Handle Browser Pre-flight (CORS fix)
     if (request.method === "OPTIONS") return new Response(null, { headers });
 
     try {
@@ -25,12 +28,12 @@ export default {
           
           const data = await res.json();
           
-          // Safety check: if Airtable returns an error, throw it
+          // Safety check: if Airtable returns an error (e.g., 401 or 404), throw it to the catch block
           if (data.error) {
             throw new Error(`Airtable Error: ${data.error.message || data.error}`);
           }
 
-          // Safely map records if they exist
+          // Safely map records if they exist; prevents the "map of undefined" error
           if (data.records) {
             const pageLeaders = data.records.map(r => ({ 
               id: r.id, 
@@ -39,7 +42,7 @@ export default {
             allLeaders = allLeaders.concat(pageLeaders);
           }
           
-          offset = data.offset;
+          offset = data.offset; // Airtable provides an offset if there are more than 100 records
         } while (offset);
 
         return new Response(JSON.stringify(allLeaders), { headers });
@@ -55,6 +58,7 @@ export default {
             records: [{ fields: { "Leader": [body.leaderId], "Request Text": body.text, "Status": "Active" } }]
           })
         });
+        if (!res.ok) throw new Error(`Airtable save error: ${res.statusText}`);
         return new Response(JSON.stringify({ status: "Saved" }), { headers });
       }
 
@@ -73,12 +77,12 @@ export default {
         return new Response(JSON.stringify({
           id: randomRecord.id,
           text: randomRecord.fields["Request Text"],
-          name: randomRecord.fields["Leader Name"]
+          name: randomRecord.fields["Leader Name"] // Assumes a lookup field exists in Airtable
         }), { headers });
       }
 
     } catch (err) {
-      // Returns the actual error message to help you debug in the browser console
+      // Returns a JSON error message to the browser console for debugging
       return new Response(JSON.stringify({ error: err.message }), { status: 500, headers });
     }
     
