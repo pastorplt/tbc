@@ -2,6 +2,7 @@ name = "prayer-app"
 main = "src/index.js"
 compatibility_date = "2025-08-01"
 workers_dev = true
+keep_vars = true
 
 [vars]
 AIRTABLE_BASE_ID = "app1TcNtvts4fkqdm"
