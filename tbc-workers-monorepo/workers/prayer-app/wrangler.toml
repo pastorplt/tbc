@@ -1,4 +1,4 @@
-name = "prayer-app-api"
+name = "prayer-app"
 main = "src/index.js"
 compatibility_date = "2025-08-01"
 workers_dev = true
