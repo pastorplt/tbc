@@ -3,23 +3,35 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Add Prayer Request</title>
+    <title>Submit Prayer Request - TBC</title>
     <style>
-        body { font-family: sans-serif; padding: 20px; max-width: 500px; margin: auto; }
-        input, textarea, button { width: 100%; margin-bottom: 15px; padding: 10px; box-sizing: border-box; }
-        button { background: #007bff; color: white; border: none; cursor: pointer; }
+        body { font-family: system-ui, -apple-system, sans-serif; margin: 0; background: #f9f9f9; color: #111; }
+        main { padding: 48px 16px; max-width: 500px; margin: 0 auto; text-align: center; }
+        h2 { font-size: 1.8rem; margin-bottom: 24px; color: #bf3426; }
+        .card { background: white; padding: 30px; border-radius: 12px; border: 1px solid #eee; box-shadow: 0 4px 12px rgba(0,0,0,0.05); text-align: left; }
+        label { font-weight: 700; display: block; margin-bottom: 8px; font-size: 0.9rem; }
+        input, textarea { width: 100%; margin-bottom: 20px; padding: 12px; border-radius: 8px; border: 1px solid #ccc; box-sizing: border-box; font-family: inherit; }
+        .btn { width: 100%; background: #bf3426; color: white; border: none; padding: 14px; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 1rem; }
+        .btn:hover { background: #a22a1f; }
     </style>
 </head>
 <body>
-    <h2>New Prayer Request</h2>
-    <label>Leader Name:</label>
-    <input list="leaders" id="leaderSearch" placeholder="Type to search...">
-    <datalist id="leaders"></datalist>
+    <div id="navbar-include"></div>
+    <script src="/include-nav.js"></script>
 
-    <label>Prayer Request (Paste Text):</label>
-    <textarea id="requestText" rows="6"></textarea>
+    <main>
+        <h2>New Prayer Request</h2>
+        <div class="card">
+            <label>Leader Name</label>
+            <input list="leaders" id="leaderSearch" placeholder="Start typing a name...">
+            <datalist id="leaders"></datalist>
 
-    <button id="submitBtn">Save Request</button>
+            <label>Prayer Request (Text)</label>
+            <textarea id="requestText" rows="6" placeholder="Paste the prayer request here..."></textarea>
+
+            <button id="submitBtn" class="btn">Save Request</button>
+        </div>
+    </main>
 
     <script>
         const API_URL = "https://prayer-app.tbccities.workers.dev";
@@ -37,17 +49,22 @@
         }
 
         document.getElementById('submitBtn').onclick = async () => {
+            const btn = document.getElementById('submitBtn');
             const name = document.getElementById('leaderSearch').value;
             const text = document.getElementById('requestText').value;
             const leader = leaders.find(l => l.name === name);
 
-            if (!leader || !text) return alert("Select a valid leader and enter text.");
+            if (!leader || !text) return alert("Please select a valid leader and enter the prayer text.");
+
+            btn.disabled = true;
+            btn.innerText = "Saving...";
 
             await fetch(`${API_URL}/submit-prayer`, {
                 method: "POST",
                 body: JSON.stringify({ leaderId: leader.id, text: text })
             });
-            alert("Saved!");
+            
+            alert("Prayer request saved successfully.");
             location.reload();
         };
 
