@@ -2,7 +2,6 @@ export default {
   async fetch(request, env) {
     const { AIRTABLE_API_KEY, AIRTABLE_BASE_ID } = env;
     const url = new URL(request.url);
-    
     const headers = { 
       "Content-Type": "application/json", 
       "Access-Control-Allow-Origin": "*",
@@ -13,7 +12,7 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { headers });
 
     try {
-      // 1. Get ALL Leaders for Autocomplete (with Pagination)
+      // 1. Get ALL Leaders (with Pagination)
       if (url.pathname === "/get-leaders") {
         let allLeaders = [];
         let offset = "";
@@ -21,7 +20,6 @@ export default {
           const fetchUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Leaders?fields%5B%5D=Leader%20Name${offset ? `&offset=${offset}` : ""}`;
           const res = await fetch(fetchUrl, { headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` } });
           const data = await res.json();
-          if (data.error) throw new Error(`Airtable Error: ${data.error.message || data.error}`);
           if (data.records) {
             allLeaders = allLeaders.concat(data.records.map(r => ({ id: r.id, name: r.fields["Leader Name"] || "Unknown" })));
           }
@@ -33,12 +31,13 @@ export default {
       // 2. Submit New Prayer Request
       if (url.pathname === "/submit-prayer" && request.method === "POST") {
         const body = await request.json();
-        const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Prayer%20Requests`, {
+        await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Prayer%20Requests`, {
           method: "POST",
           headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ records: [{ fields: { "Leader": [body.leaderId], "Request Text": body.text, "Status": "Active" } }] })
+          body: JSON.stringify({
+            records: [{ fields: { "Leader": [body.leaderId], "Request Text": body.text, "Status": "Active" } }]
+          })
         });
-        if (!res.ok) throw new Error(`Airtable Save error: ${res.statusText}`);
         return new Response(JSON.stringify({ status: "Saved" }), { headers });
       }
 
@@ -48,28 +47,34 @@ export default {
           headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` }
         });
         const data = await res.json();
-        if (!data.records || !data.records.length) return new Response(JSON.stringify({ empty: true }), { headers });
+        
+        if (!data.records || !data.records.length) {
+          return new Response(JSON.stringify({ empty: true }), { headers });
+        }
+        
         const randomRecord = data.records[Math.floor(Math.random() * data.records.length)];
         return new Response(JSON.stringify({
           id: randomRecord.id,
           text: randomRecord.fields["Request Text"],
-          name: randomRecord.fields["Leader Name"]
+          // Note: This requires a Lookup field named 'Leader Name' in the Prayer Requests table
+          name: randomRecord.fields["Leader Name"] ? randomRecord.fields["Leader Name"][0] : "Unknown Leader"
         }), { headers });
       }
 
-      // 4. Log a completed prayer (CRITICAL FOR index.html)
+      // 4. Log a Prayer (NEW: Required for index.html to work)
       if (url.pathname === "/log-prayer" && request.method === "POST") {
         const body = await request.json();
-        const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Prayer%20Logs`, {
+        await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Prayer%20Logs`, {
           method: "POST",
           headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ records: [{ fields: { "Prayer Request": [body.prayerRequestId] } }] })
+          body: JSON.stringify({
+            records: [{ fields: { "Prayer Request": [body.prayerRequestId] } }]
+          })
         });
-        if (!res.ok) throw new Error(`Airtable Log error: ${res.statusText}`);
         return new Response(JSON.stringify({ success: true }), { headers });
       }
 
-      // 5. Get History (CRITICAL FOR history.html)
+      // 5. Get History (NEW: Required for history.html)
       if (url.pathname === "/get-history") {
         const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Prayer%20Logs?maxRecords=20&sort%5B0%5D%5Bfield%5D=Date&sort%5B0%5D%5Bdirection%5D=desc`, {
           headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` }
