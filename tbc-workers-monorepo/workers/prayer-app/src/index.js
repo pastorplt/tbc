@@ -17,17 +17,28 @@ export default {
     }
 
     try {
-      // 2. Get Leaders for Autocomplete
-      if (url.pathname === "/get-leaders") {
-        const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Leaders?fields%5B%5D=Leader%20Name`, {
-          headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` }
-        });
-        if (!res.ok) throw new Error(`Airtable Leaders error: ${res.statusText}`);
-        
-        const data = await res.json();
-        const leaders = data.records.map(r => ({ id: r.id, name: r.fields["Leader Name"] }));
-        return new Response(JSON.stringify(leaders), { headers });
-      }
+      // Get ALL Leaders for Autocomplete
+if (url.pathname === "/get-leaders") {
+  let allLeaders = [];
+  let offset = "";
+  
+  // Loop until Airtable stops providing an offset
+  do {
+    const fetchUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/Leaders?fields%5B%5D=Leader%20Name${offset ? `&offset=${offset}` : ""}`;
+    const res = await fetch(fetchUrl, {
+      headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` }
+    });
+    
+    const data = await res.json();
+    const pageLeaders = data.records.map(r => ({ id: r.id, name: r.fields["Leader Name"] }));
+    allLeaders = allLeaders.concat(pageLeaders);
+    
+    // Check if there is another page of data
+    offset = data.offset;
+  } while (offset);
+
+  return new Response(JSON.stringify(allLeaders), { headers });
+}
 
       // 3. Submit New Prayer Request
       if (url.pathname === "/submit-prayer" && request.method === "POST") {
