@@ -19,7 +19,7 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { headers });
 
     try {
-      // 1. Get Leaders (Uses dynamic table name & pagination)
+      // 1. Get Leaders
       if (url.pathname === "/get-leaders") {
         let allLeaders = [];
         let offset = "";
@@ -74,6 +74,23 @@ export default {
           body: JSON.stringify({ records: [{ fields: { "Prayer Request": [body.prayerRequestId] } }] })
         });
         return new Response(JSON.stringify({ success: true }), { headers });
+      }
+
+      // 5. NEW: Get Prayer History
+      if (url.pathname === "/get-history") {
+        const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(PRAYER_LOGS_TABLE)}?maxRecords=20&sort%5B0%5D%5Bfield%5D=Date&sort%5B0%5D%5Bdirection%5D=desc`, {
+          headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` }
+        });
+        const data = await res.json();
+        
+        // This maps Airtable lookup fields to the format your history.html expects
+        const history = data.records.map(r => ({
+          date: new Date(r.fields["Date"]).toLocaleString(),
+          leader: r.fields["Leader Name"] ? r.fields["Leader Name"][0] : "Unknown",
+          request: r.fields["Request Text"] ? r.fields["Request Text"][0] : "No text"
+        }));
+        
+        return new Response(JSON.stringify(history), { headers });
       }
 
     } catch (err) {
