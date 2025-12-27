@@ -18,7 +18,7 @@
     <h1>Recent Prayers</h1>
     <div id="historyList">Loading history...</div>
     <script>
-        const API_URL = "https://prayer-app-api.tbc.workers.dev"; // Confirm this URL
+        const API_URL = "https://prayer-app.tbccities.workers.dev";
         async function loadHistory() {
             try {
                 const res = await fetch(`${API_URL}/get-history`);
