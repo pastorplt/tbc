@@ -1,6 +1,5 @@
 export default {
   async fetch(request, env) {
-    // Pull ALL variables from the environment set in wrangler.toml or the dashboard
     const { 
       AIRTABLE_API_KEY, 
       AIRTABLE_BASE_ID, 
@@ -20,35 +19,27 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { headers });
 
     try {
-      // 1. Get ALL Leaders (Uses variable and pagination)
+      // 1. Get Leaders (Uses dynamic table name & pagination)
       if (url.pathname === "/get-leaders") {
         let allLeaders = [];
         let offset = "";
         do {
-          const tableName = LEADERS_TABLE_NAME || "Leaders";
-          const fetchUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}?fields%5B%5D=Leader%20Name${offset ? `&offset=${offset}` : ""}`;
-          
+          const fetchUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(LEADERS_TABLE_NAME)}?fields%5B%5D=Leader%20Name${offset ? `&offset=${offset}` : ""}`;
           const res = await fetch(fetchUrl, { headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` } });
           const data = await res.json();
-          
           if (data.error) throw new Error(`Airtable Leaders Error: ${data.error.message}`);
-          
           if (data.records) {
-            allLeaders = allLeaders.concat(data.records.map(r => ({ 
-              id: r.id, 
-              name: r.fields["Leader Name"] || "Unknown" 
-            })));
+            allLeaders = allLeaders.concat(data.records.map(r => ({ id: r.id, name: r.fields["Leader Name"] || "Unknown" })));
           }
           offset = data.offset;
         } while (offset);
         return new Response(JSON.stringify(allLeaders), { headers });
       }
 
-      // 2. Submit New Prayer Request (Uses variable)
+      // 2. Submit New Prayer Request
       if (url.pathname === "/submit-prayer" && request.method === "POST") {
         const body = await request.json();
-        const tableName = PRAYER_REQUESTS_TABLE || "Prayer Requests";
-        const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}`, {
+        const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(PRAYER_REQUESTS_TABLE)}`, {
           method: "POST",
           headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -59,10 +50,9 @@ export default {
         return new Response(JSON.stringify({ status: "Saved" }), { headers });
       }
 
-      // 3. Get a Random Active Prayer (Uses variable)
+      // 3. Get a Random Active Prayer
       if (url.pathname === "/get-prayer") {
-        const tableName = PRAYER_REQUESTS_TABLE || "Prayer Requests";
-        const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}?filterByFormula=AND({Status}='Active')`, {
+        const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(PRAYER_REQUESTS_TABLE)}?filterByFormula=AND({Status}='Active')`, {
           headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` }
         });
         const data = await res.json();
@@ -75,9 +65,20 @@ export default {
         }), { headers });
       }
 
+      // 4. Log a completed prayer
+      if (url.pathname === "/log-prayer" && request.method === "POST") {
+        const body = await request.json();
+        const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(PRAYER_LOGS_TABLE)}`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ records: [{ fields: { "Prayer Request": [body.prayerRequestId] } }] })
+        });
+        return new Response(JSON.stringify({ success: true }), { headers });
+      }
+
     } catch (err) {
       return new Response(JSON.stringify({ error: err.message }), { status: 500, headers });
     }
-    return new Response(JSON.stringify({ error: "Not Found" }), { status: 404, headers });
+    return new Response(JSON.stringify({ error: "Route Not Found" }), { status: 404, headers });
   }
 };
