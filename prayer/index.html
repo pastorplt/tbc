@@ -8,23 +8,14 @@
         body { font-family: system-ui, -apple-system, sans-serif; margin: 0; background: #f9f9f9; color: #111; }
         main { padding: 48px 16px; max-width: 600px; margin: 0 auto; text-align: center; }
         h2 { font-size: 1.8rem; margin-bottom: 24px; color: #bf3426; }
+        .filter-wrap { margin-bottom: 20px; }
+        select { padding: 8px; border-radius: 8px; border: 1px solid #ccc; font-size: 1rem; }
         .card { background: white; padding: 40px; border-radius: 12px; border: 1px solid #eee; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
         #name { margin: 0 0 10px; font-size: 1.5rem; }
         #request { font-style: italic; margin: 24px 0; line-height: 1.6; font-size: 1.1rem; color: #444; }
-        .btn { 
-            background: #bf3426; /* TBC Red */
-            color: white; 
-            padding: 16px 32px; 
-            border: none; 
-            border-radius: 8px; 
-            font-weight: 700; 
-            cursor: pointer; 
-            font-size: 1.1rem; 
-            width: 100%; /* Consistent with input.html button width */
-        }
-        .btn:hover { 
-            background: #a22a1f; /* Darker red on hover */
-        }
+        .btn { background: #bf3426; color: white; padding: 16px 32px; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 1.1rem; width: 100%; }
+        .btn:hover { background: #a22a1f; }
+        .btn:disabled { opacity: 0.7; cursor: not-allowed; }
     </style>
 </head>
 <body>
@@ -33,6 +24,16 @@
 
     <main>
         <h2>Prayer Session</h2>
+        
+        <div class="filter-wrap">
+            <select id="filterSelect">
+                <option value="unprayed-today">Unprayed for today</option>
+                <option value="unprayed-week">Unprayed for this week</option>
+                <option value="past-month">Submitted in past month</option>
+                <option value="anytime">Submitted anytime</option>
+            </select>
+        </div>
+
         <div class="card">
             <h3 id="name">Loading...</h3>
             <p id="request"></p>
@@ -45,18 +46,24 @@
         let currentId = null;
 
         async function loadNext() {
-            const res = await fetch(`${API_URL}/get-prayer`);
+            const filter = document.getElementById('filterSelect').value;
+            const res = await fetch(`${API_URL}/get-prayer?filter=${filter}`);
             const data = await res.json();
+            
             if (data.empty) {
                 document.getElementById('name').innerText = "All Done!";
-                document.getElementById('request').innerText = "No active prayer requests found.";
+                document.getElementById('request').innerText = "No matching prayer requests found.";
                 document.getElementById('doneBtn').style.display = "none";
                 return;
             }
+            
+            document.getElementById('doneBtn').style.display = "block";
             currentId = data.id;
             document.getElementById('name').innerText = data.name;
             document.getElementById('request').innerText = `"${data.text}"`;
         }
+
+        document.getElementById('filterSelect').onchange = loadNext;
 
         document.getElementById('doneBtn').onclick = async () => {
             const btn = document.getElementById('doneBtn');
