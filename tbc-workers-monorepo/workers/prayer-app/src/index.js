@@ -9,6 +9,18 @@ export default {
       "Access-Control-Allow-Headers": "Content-Type"
     };
 
+    if (url.pathname === "/get-history") {
+  const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${PRAYER_LOGS_TABLE}?maxRecords=20&sort%5B0%5D%5Bfield%5D=Date&sort%5B0%5D%5Bdirection%5D=desc`, {
+    headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` }
+  });
+  const data = await res.json();
+  return new Response(JSON.stringify(data.records.map(r => ({
+    date: new Date(r.fields["Date"]).toLocaleString(),
+    leader: r.fields["Leader Name"] || "Unknown",
+    request: r.fields["Request Text"] || "No text provided"
+  }))), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
+}
+
     if (request.method === "OPTIONS") return new Response(null, { headers });
 
     try {
