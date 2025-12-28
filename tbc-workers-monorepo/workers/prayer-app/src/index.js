@@ -77,11 +77,14 @@ export default {
         if (!data.records || !data.records.length) return new Response(JSON.stringify({ empty: true }), { headers });
         const randomRecord = data.records[Math.floor(Math.random() * data.records.length)];
         
-        return new Response(JSON.stringify({
-          id: randomRecord.id,
-          text: randomRecord.fields["Request Text"],
-          name: randomRecord.fields["Leader Name"] 
-        }), { headers });
+        // Inside src/index.js -> /get-prayer handler
+return new Response(JSON.stringify({
+  id: randomRecord.id,
+  text: randomRecord.fields["Request Text"],
+  name: randomRecord.fields["Leader Name"],
+  createdTime: randomRecord.createdTime // Ensure this field is passed to the frontend
+}), { headers });
+
       }
 
       // 4. Log a completed prayer
