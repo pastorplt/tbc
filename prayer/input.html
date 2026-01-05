@@ -47,92 +47,94 @@
         </div>
     </main>
 
-    const API_URL = "https://prayer-app.tbccities.workers.dev";
-let leaders = [];
-
-// DOM Elements
-const leaderInput = document.getElementById('leaderSearch');
-const errorMsg = document.getElementById('leaderError');
-const submitBtn = document.getElementById('submitBtn');
-const requestText = document.getElementById('requestText');
-
-async function init() {
-    try {
-        const res = await fetch(`${API_URL}/get-leaders`);
-        leaders = await res.json();
-        const list = document.getElementById('leaders');
-        leaders.forEach(l => {
-            const opt = document.createElement('option');
-            opt.value = l.name;
-            list.appendChild(opt);
-        });
-    } catch (err) {
-        console.error("Failed to load leaders:", err);
-    }
-}
-
-// Function to validate the leader selection
-function validateLeader() {
-    const leader = leaders.find(l => l.name === leaderInput.value);
-    
-    if (leaderInput.value !== "" && !leader) {
-        // Show error if something is typed but doesn't match a leader
-        errorMsg.style.display = 'block';
-        leaderInput.style.borderColor = '#bf3426';
-        return false;
-    } else {
-        // Hide error if valid or empty
-        errorMsg.style.display = 'none';
-        leaderInput.style.borderColor = '#ccc';
-        return !!leader;
-    }
-}
-
-// Trigger validation when navigating out of the field (blur)
-leaderInput.addEventListener('blur', validateLeader);
-
-// Also validate while typing to clear errors quickly
-leaderInput.addEventListener('input', () => {
-    if (errorMsg.style.display === 'block') {
-        validateLeader();
-    }
-});
-
-submitBtn.onclick = async () => {
-    const isValid = validateLeader();
-    const text = requestText.value;
-    
-    if (!isValid) {
-        leaderInput.focus();
-        return;
-    }
-
-    if (!text) return alert("Please enter the prayer text.");
-
-    const leader = leaders.find(l => l.name === leaderInput.value);
-
-    submitBtn.disabled = true;
-    submitBtn.innerText = "Saving...";
-
-    try {
-        const response = await fetch(`${API_URL}/submit-prayer`, {
-            method: "POST",
-            body: JSON.stringify({ leaderId: leader.id, text: text })
+    <script>
+        const API_URL = "https://prayer-app.tbccities.workers.dev";
+        let leaders = [];
+        
+        // DOM Elements
+        const leaderInput = document.getElementById('leaderSearch');
+        const errorMsg = document.getElementById('leaderError');
+        const submitBtn = document.getElementById('submitBtn');
+        const requestText = document.getElementById('requestText');
+        
+        async function init() {
+            try {
+                const res = await fetch(`${API_URL}/get-leaders`);
+                leaders = await res.json();
+                const list = document.getElementById('leaders');
+                leaders.forEach(l => {
+                    const opt = document.createElement('option');
+                    opt.value = l.name;
+                    list.appendChild(opt);
+                });
+            } catch (err) {
+                console.error("Failed to load leaders:", err);
+            }
+        }
+        
+        // Function to validate the leader selection
+        function validateLeader() {
+            const leader = leaders.find(l => l.name === leaderInput.value);
+            
+            if (leaderInput.value !== "" && !leader) {
+                // Show error if something is typed but doesn't match a leader
+                errorMsg.style.display = 'block';
+                leaderInput.style.borderColor = '#bf3426';
+                return false;
+            } else {
+                // Hide error if valid or empty
+                errorMsg.style.display = 'none';
+                leaderInput.style.borderColor = '#ccc';
+                return !!leader;
+            }
+        }
+        
+        // Trigger validation when navigating out of the field (blur)
+        leaderInput.addEventListener('blur', validateLeader);
+        
+        // Also validate while typing to clear errors quickly
+        leaderInput.addEventListener('input', () => {
+            if (errorMsg.style.display === 'block') {
+                validateLeader();
+            }
         });
         
-        if (response.ok) {
-            alert("Prayer request saved successfully.");
-            location.reload();
-        } else {
-            throw new Error("Failed to save");
-        }
-    } catch (err) {
-        alert("Error saving request. Please try again.");
-        submitBtn.disabled = false;
-        submitBtn.innerText = "Save Request";
-    }
-};
-
-init();
+        submitBtn.onclick = async () => {
+            const isValid = validateLeader();
+            const text = requestText.value;
+            
+            if (!isValid) {
+                leaderInput.focus();
+                return;
+            }
+        
+            if (!text) return alert("Please enter the prayer text.");
+        
+            const leader = leaders.find(l => l.name === leaderInput.value);
+        
+            submitBtn.disabled = true;
+            submitBtn.innerText = "Saving...";
+        
+            try {
+                const response = await fetch(`${API_URL}/submit-prayer`, {
+                    method: "POST",
+                    body: JSON.stringify({ leaderId: leader.id, text: text })
+                });
+                
+                if (response.ok) {
+                    alert("Prayer request saved successfully.");
+                    location.reload();
+                } else {
+                    throw new Error("Failed to save");
+                }
+            } catch (err) {
+                alert("Error saving request. Please try again.");
+                submitBtn.disabled = false;
+                submitBtn.innerText = "Save Request";
+            }
+        };
+        
+        init();
+    </script>
 </body>
 </html>
