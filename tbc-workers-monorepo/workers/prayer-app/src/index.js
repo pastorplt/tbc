@@ -115,6 +115,25 @@ return new Response(JSON.stringify({
         return new Response(JSON.stringify(history), { headers });
       }
 
+      // 6. Archive a Prayer Request (sets status to 'Archived')
+      if (url.pathname === "/archive-prayer" && request.method === "POST") {
+        const body = await request.json();
+        const tableName = env.PRAYER_REQUESTS_TABLE || "Personal Prayer Requests";
+        const res = await fetch(`https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}/${body.prayerRequestId}`, {
+          method: "PATCH",
+          headers: { 
+            Authorization: `Bearer ${env.AIRTABLE_API_KEY}`, 
+            "Content-Type": "application/json" 
+          },
+          body: JSON.stringify({
+            fields: { "Status": "Archived" }
+          })
+        });
+        
+        if (!res.ok) throw new Error(`Airtable Archive error: ${res.statusText}`);
+        return new Response(JSON.stringify({ success: true }), { headers });
+      }
+      
     } catch (err) {
       return new Response(JSON.stringify({ error: err.message }), { status: 500, headers });
     }
