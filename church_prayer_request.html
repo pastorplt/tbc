@@ -111,13 +111,29 @@
                     fetch(`${API_URL}/get-leaders`)
                 ]);
 
-                networks = await netRes.json();
-                organizations = await orgRes.json();
-                leaders = await leadRes.json();
+                // Handle Networks
+                if (netRes.ok) {
+                    networks = await netRes.json();
+                    populateDatalist('networkList', networks);
+                } else {
+                    console.error("Failed to load networks:", netRes.status);
+                }
 
-                populateDatalist('networkList', networks);
-                populateDatalist('orgList', organizations);
-                populateDatalist('leaderList', leaders);
+                // Handle Organizations
+                if (orgRes.ok) {
+                    organizations = await orgRes.json();
+                    populateDatalist('orgList', organizations);
+                } else {
+                    console.error("Failed to load organizations:", orgRes.status);
+                }
+
+                // Handle Leaders
+                if (leadRes.ok) {
+                    leaders = await leadRes.json();
+                    populateDatalist('leaderList', leaders);
+                } else {
+                    console.error("Failed to load leaders:", leadRes.status);
+                }
 
                 // Load defaults from cookies
                 const savedNet = getCookie('tbc_network');
@@ -129,14 +145,15 @@
                 if (savedLeader) leaderInput.value = savedLeader;
 
             } catch (err) {
-                console.error("Failed to load data:", err);
-                alert("Error loading form data. Please refresh.");
+                console.error("Critical error loading data:", err);
+                alert("Error connecting to server. Please check your connection.");
             }
         }
 
         function populateDatalist(id, items) {
             const list = document.getElementById(id);
             list.innerHTML = '';
+            if (!Array.isArray(items)) return;
             items.forEach(item => {
                 const opt = document.createElement('option');
                 opt.value = item.name;
@@ -152,6 +169,8 @@
                 networkError.style.display = 'none';
                 return true; 
             }
+            if (networks.length === 0) return true; // Skip validation if list failed to load
+            
             const exists = networks.some(n => n.name.toLowerCase() === val.toLowerCase());
             if (!exists) {
                 networkInput.classList.add('error');
