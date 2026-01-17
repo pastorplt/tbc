@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Network Prayer Request</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="/assets/favicon.ico" type="image/x-icon" />
+  <link rel="shortcut icon" href="/assets/favicon.ico" type="image/x-icon" />
+  <style>
+    html, body { margin:0; height:100%; font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    #navbar-include { min-height:60px; }
+
+    .frame-wrap {
+      height: calc(100vh - 60px);
+      height: calc(100svh - 60px);
+      height: calc(100dvh - 60px);
+      width: 100%;
+    }
+    .frame-wrap iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: transparent;
+    }
+  </style>
+</head>
+<body>
+  <div id="navbar-include"></div>
+  <script src="include-nav.js"></script>
+
+  <div class="frame-wrap">
+    <iframe
+      src="https://tbccities.fillout.com/church_prayer_request"
+      frameborder="0"
+      referrerpolicy="strict-origin-when-cross-origin"
+      allow="clipboard-write *">
+    </iframe>
+  </div>
+
+  <script src="fit-embed.js"></script>
+</body>
+</html>
