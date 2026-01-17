@@ -125,7 +125,7 @@ export default {
         // D. Create Prayer Request
         const fields = {
           "Network": [finalNetworkId],
-          "Prayer Request": prayerRequest
+          "Request": prayerRequest
         };
         if (finalOrgId) fields["Organization"] = [finalOrgId];
         if (finalLeaderId) fields["Leader"] = [finalLeaderId];
