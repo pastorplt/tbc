@@ -4,7 +4,7 @@ export default {
       AIRTABLE_API_KEY, 
       AIRTABLE_BASE_ID, 
       LEADERS_TABLE_NAME, 
-      PRAYER_REQUESTS_TABLE,
+      PRAYER_REQUESTS_TABLE, 
       PRAYER_LOGS_TABLE,
       NETWORKS_TABLE_NAME,
       ORGANIZATIONS_TABLE_NAME,
@@ -21,7 +21,7 @@ export default {
 
     if (request.method === "OPTIONS") return new Response(null, { headers });
 
-    // Helper to fetch all records from a table (handling pagination)
+    // Helper: Fetch all records (pagination)
     async function fetchAllRecords(tableName, nameField) {
       let allRecords = [];
       let offset = "";
@@ -29,7 +29,11 @@ export default {
         const fetchUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}?fields%5B%5D=${encodeURIComponent(nameField)}${offset ? `&offset=${offset}` : ""}`;
         const res = await fetch(fetchUrl, { headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` } });
         const data = await res.json();
-        if (data.error) throw new Error(`Airtable Error (${tableName}): ${data.error.message}`);
+        
+        if (!res.ok || data.error) {
+          throw new Error(`Airtable Error (${tableName}): ${data.error?.message || res.statusText}`);
+        }
+        
         if (data.records) {
           allRecords = allRecords.concat(data.records.map(r => ({ id: r.id, name: r.fields[nameField] || "" })));
         }
@@ -38,7 +42,7 @@ export default {
       return allRecords;
     }
 
-    // Helper to find a record by name or create it if missing
+    // Helper: Find or Create Record
     async function findOrCreate(tableName, nameField, nameValue) {
       // 1. Search
       const filterFormula = `{${nameField}} = '${nameValue.replace(/'/g, "\\'")}'`;
@@ -66,7 +70,7 @@ export default {
     }
 
     try {
-      // --- Existing Endpoints ---
+      // --- Endpoints ---
 
       // 1. Get Leaders
       if (url.pathname === "/get-leaders") {
@@ -74,22 +78,19 @@ export default {
         return new Response(JSON.stringify(leaders), { headers });
       }
 
-      // --- New Endpoints ---
-
-      // 1b. Get Networks
+      // 2. Get Networks
       if (url.pathname === "/get-networks") {
         const networks = await fetchAllRecords(NETWORKS_TABLE_NAME, "Network Name");
         return new Response(JSON.stringify(networks), { headers });
       }
 
-      // 1c. Get Organizations
+      // 3. Get Organizations (Updated to use "Org Name")
       if (url.pathname === "/get-organizations") {
-        // Assuming "Organization Name" is the primary field
-        const orgs = await fetchAllRecords(ORGANIZATIONS_TABLE_NAME, "Organization Name");
+        const orgs = await fetchAllRecords(ORGANIZATIONS_TABLE_NAME, "Org Name");
         return new Response(JSON.stringify(orgs), { headers });
       }
 
-      // 2. Submit New CHURCH Prayer Request (IN: Prayer Requests)
+      // 4. Submit Church Prayer
       if (url.pathname === "/submit-church-prayer" && request.method === "POST") {
         const body = await request.json();
         const { networkName, organizationName, leaderName, prayerRequest } = body;
@@ -98,14 +99,7 @@ export default {
           return new Response(JSON.stringify({ error: "Network and Request are required" }), { status: 400, headers });
         }
 
-        // A. Resolve Network (Read-only, must exist)
-        // We assume the frontend sends a valid name, but we double check or search it.
-        // Since we don't create networks, we just search.
-        const networkId = await findOrCreate(NETWORKS_TABLE_NAME, "Network Name", networkName).catch(() => null); 
-        // Note: findOrCreate actually creates if missing. 
-        // To strictly enforce "read-only", we should just search. 
-        // However, `findOrCreate` above creates. Let's rewrite a strict search for Network.
-        
+        // A. Resolve Network (Strict Search - Read Only)
         const netFilter = `{Network Name} = '${networkName.replace(/'/g, "\\'")}'`;
         const netRes = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(NETWORKS_TABLE_NAME)}?filterByFormula=${encodeURIComponent(netFilter)}&maxRecords=1`, { 
             headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` } 
@@ -116,10 +110,10 @@ export default {
         }
         const finalNetworkId = netData.records[0].id;
 
-        // B. Resolve Organization (Find or Create)
+        // B. Resolve Organization (Find or Create using "Org Name")
         let finalOrgId = null;
         if (organizationName) {
-          finalOrgId = await findOrCreate(ORGANIZATIONS_TABLE_NAME, "Organization Name", organizationName);
+          finalOrgId = await findOrCreate(ORGANIZATIONS_TABLE_NAME, "Org Name", organizationName);
         }
 
         // C. Resolve Leader (Find or Create)
@@ -150,16 +144,13 @@ export default {
         return new Response(JSON.stringify({ status: "Saved" }), { headers });
       }
 
-      // --- Existing Personal Prayer Logic (unchanged) ---
-
+      // --- Original Personal Prayer Routes (Preserved) ---
       if (url.pathname === "/submit-prayer" && request.method === "POST") {
         const body = await request.json();
         const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(PRAYER_REQUESTS_TABLE)}`, {
           method: "POST",
           headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            records: [{ fields: { "Leader": [body.leaderId], "Request Text": body.text, "Status": "Active" } }]
-          })
+          body: JSON.stringify({ records: [{ fields: { "Leader": [body.leaderId], "Request Text": body.text, "Status": "Active" } }] })
         });
         if (!res.ok) throw new Error(`Airtable Save error: ${res.statusText}`);
         return new Response(JSON.stringify({ status: "Saved" }), { headers });
@@ -168,34 +159,22 @@ export default {
       if (url.pathname === "/get-prayer") {
         const filterType = url.searchParams.get('filter') || 'unprayed-today';
         let formula = "AND({Status}='Active')";
-
-        if (filterType === 'unprayed-today') {
-          formula = `AND({Status}='Active', OR({Last Prayed}=BLANK(), DATETIME_DIFF(NOW(), {Last Prayed}, 'days') >= 1))`;
-        } else if (filterType === 'unprayed-week') {
-          formula = `AND({Status}='Active', OR({Last Prayed}=BLANK(), DATETIME_DIFF(NOW(), {Last Prayed}, 'days') >= 7))`;
-        } else if (filterType === 'past-month') {
-          formula = `AND({Status}='Active', DATETIME_DIFF(NOW(), CREATED_TIME(), 'days') <= 30)`;
-        }
+        if (filterType === 'unprayed-today') formula = `AND({Status}='Active', OR({Last Prayed}=BLANK(), DATETIME_DIFF(NOW(), {Last Prayed}, 'days') >= 1))`;
+        else if (filterType === 'unprayed-week') formula = `AND({Status}='Active', OR({Last Prayed}=BLANK(), DATETIME_DIFF(NOW(), {Last Prayed}, 'days') >= 7))`;
+        else if (filterType === 'past-month') formula = `AND({Status}='Active', DATETIME_DIFF(NOW(), CREATED_TIME(), 'days') <= 30)`;
 
         const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(PRAYER_REQUESTS_TABLE)}?filterByFormula=${encodeURIComponent(formula)}`, {
           headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` }
         });
         const data = await res.json();
-        
         if (!data.records || !data.records.length) return new Response(JSON.stringify({ empty: true }), { headers });
         const randomRecord = data.records[Math.floor(Math.random() * data.records.length)];
-        
-        return new Response(JSON.stringify({
-          id: randomRecord.id,
-          text: randomRecord.fields["Request Text"],
-          name: randomRecord.fields["Leader Name"],
-          createdTime: randomRecord.createdTime
-        }), { headers });
+        return new Response(JSON.stringify({ id: randomRecord.id, text: randomRecord.fields["Request Text"], name: randomRecord.fields["Leader Name"], createdTime: randomRecord.createdTime }), { headers });
       }
 
       if (url.pathname === "/log-prayer" && request.method === "POST") {
         const body = await request.json();
-        const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(PRAYER_LOGS_TABLE)}`, {
+        await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(PRAYER_LOGS_TABLE)}`, {
           method: "POST",
           headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({ records: [{ fields: { "Prayer Request": [body.prayerRequestId] } }] })
@@ -218,8 +197,7 @@ export default {
 
       if (url.pathname === "/archive-prayer" && request.method === "POST") {
         const body = await request.json();
-        const tableName = env.PRAYER_REQUESTS_TABLE || "Personal Prayer Requests";
-        const res = await fetch(`https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}/${body.prayerRequestId}`, {
+        const res = await fetch(`https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(PRAYER_REQUESTS_TABLE)}/${body.prayerRequestId}`, {
           method: "PATCH",
           headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({ fields: { "Status": "Archived" } })
