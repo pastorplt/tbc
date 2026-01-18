@@ -90,12 +90,15 @@
     /* ===== Popup content & chips ===== */
     .popup { font: 13px/1.35 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; min-width: 240px; max-width: 360px; color: #111; }
     .popup h3 { font-size: 15px; margin: 0 0 6px; font-weight: 700; }
-    .field-row { margin: 4px 0; }
+    .field-row { margin: 4px 0; overflow-wrap: break-word; }
     .field-row b { font-weight: 600; }
     .tag-strip { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
     .chip { display: inline-block; padding: 4px 10px; border-radius: 999px; border: 1px solid transparent; font-size: 12px; line-height: 1.1; }
     .chip-colored { color: #fff; }
     .tag-pill.colored { border-color: transparent; }
+    
+    .prayer-request { margin-top: 8px; padding-top: 8px; border-top: 1px solid #e9ecef; }
+    .prayer-request .label { font-weight: 700; display: block; margin-bottom: 2px; color: #bf3426; }
 
     .popup hr { border:0; border-top:1px solid #e9ecef; margin:8px 0; }
 
@@ -195,7 +198,6 @@
     </aside>
   </div>
 
-  <!-- Mobile info sheet (modal) -->
   <div id="infoSheet" class="sheet" aria-hidden="true">
     <div class="sheet-backdrop" data-close="1"></div>
     <div class="sheet-panel" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
@@ -231,8 +233,11 @@
     const datasetStatusEl = document.getElementById('datasetStatus');
 
     let allFeatures = [];
+    let featureMap = new Map(); // Store features by ID for fast lookup
+    let markersMap = new Map(); // Store markers by feature ID
     let FIELDS = {};
     let preselectApplied = false;
+    let initialParamsHandled = false;
 
     const datasetCache = new Map();
     let selectedDatasetKeys = new Set([DEFAULT_GEOJSON_KEY]);
@@ -245,6 +250,7 @@
       const byNorm = new Map(keys.map(k => [normKey(k), k]));
       const pick = (...c) => { for (const cand of c) { const k = normKey(cand); if (byNorm.has(k)) return byNorm.get(k); } for (const [nk, orig] of byNorm.entries()) if (c.some(cand => nk.includes(normKey(cand)))) return orig; return null; };
       return {
+        id: "id", // assume ID is always 'id' in GeoJSON
         name: pick("Organization Name","Org Name","Name","organization_name"),
         website: pick("Website","URL","Link","website"),
         category: pick("Category","Categories","category"),
@@ -253,24 +259,21 @@
         address: pick("Full Address","Address","full_address"),
         county: pick("County","county"),
         network: pick("Network Name","Network","network_name"),
+        prayer: pick("Latest Prayer Request", "prayer_request", "prayer")
       };
     }
 
     function normalizeTags(v) { if (!v && v !== 0) return []; if (Array.isArray(v)) return v.map(x => String(x).trim()).filter(Boolean); return String(v).split(/[,;|]/).map(s => s.trim()).filter(Boolean); }
     function uniqueSortedTags(features, fieldKey) { const set = new Set(); for (const f of features) normalizeTags(f.properties?.[fieldKey]).forEach(t => set.add(t)); return Array.from(set).sort((a,b)=>a.localeCompare(b, undefined, {sensitivity:'base'})); }
 
-    /* ===== Color logic =====
-       - Use same palette as network map
-       - Assign colors globally so we cycle through all 30 before repeating, even across groups
-       - Keep per-group canonicalization (e.g., strip trailing "County" for counties)
-    */
+    /* ===== Color logic ===== */
     const palette30 = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf','#393b79','#637939','#8c6d31','#843c39','#7b4173','#3182bd','#31a354','#756bb1','#636363','#e6550d','#9edae5','#c7c7c7','#bc80bd','#ffed6f','#a6cee3','#b2df8a','#fb9a99','#fdbf6f','#cab2d6','#6a3d9a'];
     function hashIndex(str, m){ let h=0; for(let i=0;i<str.length;i++) h=(h*31 + str.charCodeAt(i))|0; return Math.abs(h)%m; }
     function colorForFeature(props) { const key = `${props[FIELDS.name]||''}|${props[FIELDS.address]||''}`; return palette30[ hashIndex(key, palette30.length) ]; }
 
-    // Global tag→color map (spans all groups)
-    const GLOBAL_TAG_COLORS = new Map(); // key: `${groupKey}\u241F${canon}` → color
-    const GROUP_ORDER = ['type','county','network','category','denomination']; // interleave for better variety
+    // Global tag→color map
+    const GLOBAL_TAG_COLORS = new Map();
+    const GROUP_ORDER = ['type','county','network','category','denomination'];
 
     function canonicalizeTag(groupKey, tag){
       let t = String(tag||'').trim();
@@ -281,7 +284,6 @@
 
     function computeGlobalTagColors(features){
       GLOBAL_TAG_COLORS.clear();
-      // collect unique canonical tags per group in stable sorted order
       const perGroup = {};
       GROUP_ORDER.forEach(g => {
         const fk = FIELDS[g];
@@ -289,7 +291,6 @@
         const uniq = Array.from(new Set(raw.map(t => canonicalizeTag(g, t)).filter(Boolean)));
         perGroup[g] = uniq;
       });
-      // interleave across groups so colors rotate globally before repeating
       const idxByGroup = Object.fromEntries(GROUP_ORDER.map(g => [g, 0]));
       let assigned = 0;
       let remaining = GROUP_ORDER.reduce((acc,g) => acc + perGroup[g].length, 0);
@@ -315,26 +316,17 @@
       const canon = canonicalizeTag(groupKey, tag);
       const key = `${groupKey}\u241F${canon}`;
       if (GLOBAL_TAG_COLORS.has(key)) return GLOBAL_TAG_COLORS.get(key);
-      // Fallback (should rarely be needed) — deterministic but not globally coordinated
       return palette30[ hashIndex(key, palette30.length) ];
     }
 
-    function contrastText(hex){ // simple YIQ contrast
-      try { const h = hex.replace('#',''); const r=parseInt(h.slice(0,2),16), g=parseInt(h.slice(2,4),16), b=parseInt(h.slice(4,6),16); const yiq=(r*299+g*587+b*114)/1000; return yiq>=150?'#111':'#fff'; } catch { return '#fff'; }
-    }
+    function contrastText(hex){ try { const h = hex.replace('#',''); const r=parseInt(h.slice(0,2),16), g=parseInt(h.slice(2,4),16), b=parseInt(h.slice(4,6),16); const yiq=(r*299+g*587+b*114)/1000; return yiq>=150?'#111':'#fff'; } catch { return '#fff'; } }
 
     function datasetDisplayName(key) {
       if (!key || typeof key !== "string") return "GeoJSON";
       const normalizedKey = key.trim().toLowerCase();
       if (normalizedKey === DEFAULT_GEOJSON_KEY.toLowerCase()) return "TBC Data";
-
       const base = key.replace(/\.geojson$/i, "").replace(/[_-]+/g, " ").trim();
-      if (!base) return key;
-
-      const normalizedBase = base.toLowerCase();
-      if (normalizedBase === "ecc" || normalizedBase === "ecc data") return "ECC Data";
-
-      return base.replace(/\b\w/g, (c) => c.toUpperCase());
+      return base ? base.replace(/\b\w/g, c=>c.toUpperCase()) : key;
     }
 
     function formatFileSize(bytes) {
@@ -350,9 +342,7 @@
       if (file.key) parts.push(file.key);
       if (file.uploaded) {
         const dt = new Date(file.uploaded);
-        if (!Number.isNaN(dt.getTime())) {
-          parts.push(`Updated ${dt.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`);
-        }
+        if (!Number.isNaN(dt.getTime())) parts.push(`Updated ${dt.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`);
       }
       if (file.size != null) {
         const size = formatFileSize(file.size);
@@ -363,8 +353,7 @@
 
     function datasetUrlForKey(key) {
       if (typeof key !== "string" || !key.trim()) return `${API_BASE}/orgs/${DEFAULT_GEOJSON_KEY}`;
-      const safeSegments = key.split('/').map(seg => encodeURIComponent(seg));
-      return `${API_BASE}/orgs/${safeSegments.join('/')}`;
+      return `${API_BASE}/orgs/${key.split('/').map(encodeURIComponent).join('/')}`;
     }
 
     async function loadDatasetList() {
@@ -392,7 +381,7 @@
       return datasetCache.get(key);
     }
 
-    // === Church icon (single path to avoid seam; shorter building to y=18) ===
+    // === Church icon ===
     function churchSVG(color, size=20){
       const s = Number(size) || 20;
       return `\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="${s}" height="${s}" aria-hidden="true">\n  <path d="M7 10 L12 4 L17 10 L17 18 L7 18 Z" fill="${color}"/>\n</svg>`;
@@ -412,41 +401,29 @@
         label.setAttribute('for', id);
         const bg = colorForTag(groupKey, tag);
         const fg = contrastText(bg);
-        label.style.background = bg;
-        label.style.color = fg;
-        label.style.borderColor = 'transparent';
+        label.style.background = bg; label.style.color = fg; label.style.borderColor = 'transparent';
 
         const input = document.createElement('input');
         input.type = 'checkbox';
         input.id = id; input.value = tag; input.dataset.group = groupKey;
 
         const span = document.createElement('span'); span.textContent = tag;
-
         label.appendChild(input); label.appendChild(span); container.appendChild(label);
       });
     }
 
     function buildDatasetSelector(files = []) {
       if (!datasetOptionsEl) return;
-
       const dedup = new Map();
       files.forEach(file => {
-        if (!file || typeof file.key !== 'string') return;
-        if (!file.key.endsWith('.geojson')) return;
+        if (!file || typeof file.key !== 'string' || !file.key.endsWith('.geojson')) return;
         if (!dedup.has(file.key)) dedup.set(file.key, file);
       });
-      if (!dedup.has(DEFAULT_GEOJSON_KEY)) {
-        dedup.set(DEFAULT_GEOJSON_KEY, { key: DEFAULT_GEOJSON_KEY });
-      }
+      if (!dedup.has(DEFAULT_GEOJSON_KEY)) dedup.set(DEFAULT_GEOJSON_KEY, { key: DEFAULT_GEOJSON_KEY });
 
       const sorted = Array.from(dedup.values()).sort((a, b) => {
-        const timeA = Date.parse(a?.uploaded || '');
-        const timeB = Date.parse(b?.uploaded || '');
-        if (!Number.isNaN(timeA) && !Number.isNaN(timeB) && timeA !== timeB) {
-          return timeB - timeA;
-        }
-        if (!Number.isNaN(timeB) && Number.isNaN(timeA)) return 1;
-        if (!Number.isNaN(timeA) && Number.isNaN(timeB)) return -1;
+        const timeA = Date.parse(a?.uploaded || ''), timeB = Date.parse(b?.uploaded || '');
+        if (!Number.isNaN(timeA) && !Number.isNaN(timeB) && timeA !== timeB) return timeB - timeA;
         return String(a.key).localeCompare(String(b.key));
       });
 
@@ -458,21 +435,16 @@
       sorted.forEach(file => {
         const option = document.createElement('label');
         option.className = 'dataset-option';
-
         const input = document.createElement('input');
         input.type = 'checkbox';
         input.value = file.key;
         input.checked = selectedDatasetKeys.has(file.key);
-
         const info = document.createElement('div');
         info.className = 'dataset-info';
-
         const nameSpan = document.createElement('div');
         nameSpan.className = 'dataset-name';
         nameSpan.textContent = datasetDisplayName(file.key);
-
         info.appendChild(nameSpan);
-
         const metaText = formatDatasetMeta(file);
         if (metaText) {
           const metaSpan = document.createElement('div');
@@ -480,10 +452,7 @@
           metaSpan.textContent = metaText;
           info.appendChild(metaSpan);
         }
-
-        option.appendChild(input);
-        option.appendChild(info);
-
+        option.appendChild(input); option.appendChild(info);
         input.addEventListener('change', async () => {
           const checked = input.checked;
           if (checked) selectedDatasetKeys.add(file.key); else selectedDatasetKeys.delete(file.key);
@@ -499,7 +468,6 @@
             updateDatasetStatus({ datasetCount: selectedDatasetKeys.size, featureCount: allFeatures.length });
           }
         });
-
         datasetOptionsEl.appendChild(option);
       });
     }
@@ -508,13 +476,8 @@
       if (!datasetStatusEl) return;
       const datasetCount = Number(info.datasetCount || info.datasets || 0);
       const featureCount = Number(info.featureCount || info.features || 0);
-      if (!datasetCount) {
-        datasetStatusEl.textContent = 'Select at least one dataset to display.';
-        return;
-      }
-      const datasetLabel = datasetCount === 1 ? 'dataset' : 'datasets';
-      const featureLabel = featureCount === 1 ? 'location' : 'locations';
-      datasetStatusEl.textContent = `Showing ${datasetCount} ${datasetLabel} (${featureCount} ${featureLabel})`;
+      if (!datasetCount) { datasetStatusEl.textContent = 'Select at least one dataset to display.'; return; }
+      datasetStatusEl.textContent = `Showing ${datasetCount} ${datasetCount===1?'dataset':'datasets'} (${featureCount} ${featureCount===1?'location':'locations'})`;
     }
 
     function chipsRow(props){
@@ -539,22 +502,34 @@
       return `<div class="tag-strip">${chips.join('')}</div>`;
     }
 
+    // UPDATED: Show prayer request if present
     function infoHtml(props) {
       const name = props[FIELDS.name] || "(No name)";
       const website = props[FIELDS.website];
       const address = props[FIELDS.address];
+      const prayerRequest = props[FIELDS.prayer];
+
+      let prayerHtml = '';
+      if (prayerRequest && String(prayerRequest).trim()) {
+        prayerHtml = `<div class="prayer-request">
+          <span class="label">Prayer Request:</span>
+          <div>${String(prayerRequest).trim()}</div>
+        </div>`;
+      }
+
       return `<div class="popup">
         <h3>${name}</h3>
         ${address ? `<div class="field-row"><b>Address:</b> ${address}</div>` : ""}
         ${website ? `<div class="field-row"><b>Website:</b> <a href="${website}" target="_blank" rel="noopener">${website}</a></div>` : ""}
         ${chipsRow(props)}
+        ${prayerHtml}
       </div>`;
     }
 
     const markersLayer = L.layerGroup().addTo(map);
-    function clearMarkers(){ markersLayer.clearLayers(); }
+    function clearMarkers(){ markersLayer.clearLayers(); markersMap.clear(); }
 
-    // ===== Bottom sheet helpers (from networks map) =====
+    // ===== Bottom sheet helpers =====
     const sheetEl = document.getElementById('infoSheet');
     const sheetContentEl = document.getElementById('sheetContent');
     let scrollLockY = 0;
@@ -576,6 +551,10 @@
         const icon = makeChurchIcon(color);
         const m = L.marker([lat, lng], { icon });
 
+        // Store in map for deep linking
+        const recId = props.id;
+        if (recId) markersMap.set(recId, { marker: m, props });
+
         m.on('click', () => {
           const html = infoHtml(props);
           if (isMobile()) { openSheet(html); } else { m.bindPopup(html, { maxWidth: 420, closeOnClick: true, autoClose: true }).openPopup(); }
@@ -584,7 +563,7 @@
         markersLayer.addLayer(m);
         pts.push([lat, lng]);
       });
-      if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.08));
+      if (pts.length && !initialParamsHandled) map.fitBounds(L.latLngBounds(pts).pad(0.08));
     }
 
     function applyFilters() {
@@ -632,6 +611,79 @@
       });
     }
 
+    // ===== Deep Linking & Random Logic =====
+    function handleInitialUrlParams() {
+      if (initialParamsHandled || allFeatures.length === 0) return;
+      initialParamsHandled = true;
+
+      const params = new URLSearchParams(window.location.search);
+      const targetId = params.get('id');
+      const targetOrg = params.get('org');
+      const randomMode = params.get('random');
+
+      // 1. Zoom to ID
+      if (targetId && markersMap.has(targetId)) {
+        const { marker, props } = markersMap.get(targetId);
+        openAndZoom(marker, props);
+        return;
+      }
+
+      // 2. Zoom to Org Name (fuzzy match)
+      if (targetOrg) {
+        const targetName = targetOrg.toLowerCase().trim();
+        const match = allFeatures.find(f => {
+          const name = (f.properties[FIELDS.name] || "").toLowerCase();
+          return name.includes(targetName);
+        });
+        if (match && match.properties.id && markersMap.has(match.properties.id)) {
+          const { marker, props } = markersMap.get(match.properties.id);
+          openAndZoom(marker, props);
+          return;
+        }
+      }
+
+      // 3. Random Mode
+      if (randomMode) {
+        let candidates = allFeatures;
+        
+        // random=2: Only organizations with a prayer request
+        if (randomMode === '2') {
+          candidates = allFeatures.filter(f => {
+            const req = f.properties[FIELDS.prayer];
+            return req && String(req).trim().length > 0;
+          });
+          // Fallback: if none found, do nothing (user requested behavior)
+          if (candidates.length === 0) {
+            console.log("No organizations with prayer requests found.");
+            return; 
+          }
+        }
+
+        if (candidates.length > 0) {
+          const pick = candidates[Math.floor(Math.random() * candidates.length)];
+          const recId = pick.properties.id;
+          if (recId && markersMap.has(recId)) {
+            const { marker, props } = markersMap.get(recId);
+            // Give map a moment to render bounds before zooming
+            setTimeout(() => openAndZoom(marker, props), 200);
+          }
+        }
+      }
+    }
+
+    function openAndZoom(marker, props) {
+      if (!marker) return;
+      const latLng = marker.getLatLng();
+      map.setView(latLng, 16, { animate: true }); // Zoom level 16 for detail
+      
+      const html = infoHtml(props);
+      if (isMobile()) {
+        openSheet(html);
+      } else {
+        marker.bindPopup(html, { maxWidth: 420, closeOnClick: true, autoClose: true }).openPopup();
+      }
+    }
+
     // ===== Bootstrap =====
     function preselectFromParams() {
       const params = new URLSearchParams(location.search);
@@ -644,11 +696,15 @@
 
     function updateFeatureData(features = [], previousSelections) {
       allFeatures = Array.isArray(features) ? features : [];
+      featureMap.clear();
+      allFeatures.forEach(f => { if(f.properties?.id) featureMap.set(f.properties.id, f); });
+
       const sampleFeature = allFeatures.find(f => f && f.properties && Object.keys(f.properties || {}).length) || null;
       const sampleProps = sampleFeature ? sampleFeature.properties : {};
       FIELDS = resolveFieldsFromSample(sampleProps || {});
       computeGlobalTagColors(allFeatures);
 
+      // Build filters (County, Network, etc.)
       const countyList = el('#list-county');
       if (countyList) buildTagList(countyList, FIELDS.county ? uniqueSortedTags(allFeatures, FIELDS.county) : [], 'county');
 
@@ -689,10 +745,15 @@
         drawMarkers(filterFeaturesBySelections(previousSelections));
       } else {
         drawMarkers(allFeatures);
+        
+        // Initial URL logic (only runs once)
         if (!preselectApplied) {
           preselectFromParams();
           preselectApplied = true;
         }
+        
+        // Trigger Deep Links / Random mode after markers are drawn
+        handleInitialUrlParams();
       }
     }
 
