@@ -12,6 +12,10 @@ zone_name = "tbc.city"
 binding = "NETWORK_MAP_BUCKET"
 bucket_name = "tbc-data"
 
+[[r2_buckets]]
+binding = "NETWORK_IMAGES_BUCKET"
+bucket_name = "tbc-data"
+
 [vars]
 AIRTABLE_BASE_ID = "app1TcNtvts4fkqdm"
 AIRTABLE_VIEW_NAME = "Grid view"
