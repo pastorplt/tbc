@@ -26,8 +26,7 @@ export default {
     try {
       const objectKey = getGeoJsonKey(env);
 
-      // List available GeoJSON files so other services (e.g. network_map.api)
-      // can discover what has already been generated.
+      // List available GeoJSON files
       if (request.method === "GET" && (pathname === "/orgs" || pathname === "/orgs/")) {
         const files = await listAllGeoJson(env.ORG_MAP_BUCKET);
         return withCORS(json({ files }));
@@ -93,9 +92,9 @@ export default {
         if (state.cursor === undefined) state.cursor = null;
         if (!Number.isFinite(Number(state.totalFeatures))) state.totalFeatures = 0;
 
-        // If the request includes a cursor use that, otherwise resume from saved state.
         const startCursor = payload.cursor != null ? payload.cursor : state.cursor;
 
+        // UPDATED: Added "Latest Prayer Request" to the fetch list
         const { records, nextCursor, pagesUsed } = await fetchAirtableChunk(env, tableName, [
           fieldLat, fieldLon,
           "Org Name",
@@ -105,13 +104,13 @@ export default {
           "Org Type",
           "Address",
           "County",
-          "Network Name"
+          "Network Name",
+          "Latest Prayer Request"
         ], { offset: startCursor || undefined, maxPages: MAX_PAGES });
 
         const features = recordsToFeatures(records, { fieldLat, fieldLon });
         const processed = features.length;
 
-        // If there's still more to pull, persist this chunk and return progress.
         if (nextCursor) {
           const chunkKey = `orgs/tmp/${jobId}/chunk-${String(state.chunkCount + 1).padStart(4, "0")}.json`;
           await env.ORG_MAP_BUCKET.put(chunkKey, JSON.stringify(features), {
@@ -140,9 +139,8 @@ export default {
           }));
         }
 
-        // No more Airtable pages to fetch -> gather any stored chunks and finalize.
+        // Finalize
         const allFeatures = [];
-
         if (state.chunkKeys.length) {
           for (const key of state.chunkKeys) {
             const chunkObj = await env.ORG_MAP_BUCKET.get(key);
@@ -153,11 +151,7 @@ export default {
             }
           }
         }
-
         allFeatures.push(...features);
-
-        const priorCount = Number(state.totalFeatures) || 0;
-        const totalCount = priorCount + processed;
 
         const fc = JSON.stringify({ type: "FeatureCollection", features: allFeatures });
 
@@ -174,12 +168,13 @@ export default {
           ok: true,
           status: "completed",
           jobId,
-          features: totalCount,
+          features: (Number(state.totalFeatures) || 0) + processed,
           updatedAt: new Date().toISOString(),
           objectKey: targetKey
         }));
       }
 
+      // Delete endpoint
       if (request.method === "POST" && pathname === "/orgs/admin/delete") {
         const token = (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
         if (!token || token !== env.REGEN_TOKEN) return withCORS(json({ error: "Unauthorized" }, 401));
@@ -195,7 +190,6 @@ export default {
         if (!exists) return withCORS(json({ error: "GeoJSON file not found", key: rawKey }, 404));
 
         await env.ORG_MAP_BUCKET.delete(rawKey);
-
         return withCORS(json({ ok: true, deleted: rawKey }));
       }
 
@@ -354,7 +348,9 @@ function recordsToFeatures(records, { fieldLat, fieldLon }) {
         organization_type: normalizeValue(f["Org Type"]),
         full_address:      normalizeValue(f["Address"]),
         county:            normalizeValue(f["County"]),
-        network_name:      normalizeValue(f["Network Name"])
+        network_name:      normalizeValue(f["Network Name"]),
+        // UPDATED: Map Latest Prayer Request to prayer_request property
+        prayer_request:    normalizeValue(f["Latest Prayer Request"])
       }
     });
   }
