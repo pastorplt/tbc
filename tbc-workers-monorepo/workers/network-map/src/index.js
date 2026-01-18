@@ -25,7 +25,6 @@ export default {
 
     try {
       if (request.method === 'GET' && (pathname === '/networks.geojson' || pathname === '/networks/polygons.geojson')) {
-        // Serve the published file from R2
         const obj = await env.NETWORK_MAP_BUCKET.get('latest.geojson');
         if (!obj) return withCORS(json({ error: 'GeoJSON not generated yet' }, 404));
         return withCORS(new Response(obj.body, {
@@ -37,16 +36,14 @@ export default {
       }
 
       if (request.method === 'POST' && (pathname === '/admin/regenerate' || pathname === '/networks/admin/regenerate')) {
-        // Protect with Bearer token
         const token = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
         if (!token || token !== env.REGEN_TOKEN) {
           return withCORS(json({ error: 'Unauthorized' }, 401));
         }
 
-        // Build from Airtable (same logic you had)
         const records = await fetchAllRecords(env);
         
-        // Prewarm R2 with 400px WebP images so they're ready before clients request them
+        // This will now actually work because the binding exists!
         await prewarmAll(env, records);
 
         const origin = new URL(request.url).origin;
@@ -58,14 +55,12 @@ export default {
           if (!geometry) continue;
 
           const leaders = normalizeLeaders(f['Network Leaders Names']) || '';
-
           const allPrayerRequests = normalizeTextField(
             f['All Prayer Requests'] ?? f['All Prayer Request'] ?? f['Prayer Requests']
           );
           const latestPrayerRequest = normalizeTextField(f['Latest Prayer Request']);
           const canonicalPrayerRequest = allPrayerRequests || latestPrayerRequest;
 
-          // ----- Photos (attachment vs strings) -----
           let photoUrls = [];
           const photoField = f['Photo'];
           const isPhotoAttachmentArray =
@@ -78,7 +73,6 @@ export default {
             photoUrls = [...new Set(collectPhotoUrls(photoField).map(normalizeUrl))].slice(0, 6);
           }
 
-          // ----- Images -----
           let imageUrls = [];
           const imageField = f['Image'];
           const isImageAttachmentArray =
@@ -109,12 +103,10 @@ export default {
               tags: normalizeTextField(f['Tags']),
               number_of_churches: f['Number of Churches'] ?? '',
               unify_lead: normalizeTextField(f['Unify Lead']),
-              // Prayer request fields (prefer "All Prayer Requests" when available)
               latest_prayer_request: latestPrayerRequest,
               all_prayer_requests: allPrayerRequests,
               prayer_request: canonicalPrayerRequest,
               prayer_requests: canonicalPrayerRequest,
-              // Photos/Images
               photo1, photo2, photo3, photo4, photo5, photo6,
               photo_count,
               image1, image2, image3, image4, image5, image6,
@@ -125,7 +117,6 @@ export default {
 
         const fc = JSON.stringify({ type: 'FeatureCollection', features });
 
-        // Write to R2 as latest.geojson
         await env.NETWORK_MAP_BUCKET.put('latest.geojson', fc, {
           httpMetadata: {
             contentType: 'application/geo+json; charset=utf-8',
@@ -140,15 +131,46 @@ export default {
         }));
       }
 
-      // Attachment redirect helpers (unchanged)
+      // --- UPDATED IMAGE HANDLERS ---
       if (request.method === 'GET' && pathname.startsWith('/img/')) {
         const { recordId, index } = parseAttachmentPath(pathname, 'img');
         if (!recordId) return withCORS(text('Bad index', 400));
+        
+        // 1. Try serving from R2 cache first
+        if (env.NETWORK_IMAGES_BUCKET) {
+            const key = `images/${recordId}/${index}/w400-webp`;
+            const obj = await env.NETWORK_IMAGES_BUCKET.get(key);
+            if (obj) {
+                return withCORS(new Response(obj.body, {
+                    headers: { 
+                        'Content-Type': 'image/webp', 
+                        'Cache-Control': 'public, max-age=604800, immutable' 
+                    }
+                }));
+            }
+        }
+        // 2. Fallback to Airtable redirect
         return withCORS(await handleAttachmentRedirect(env, recordId, index, 'Photo'));
       }
+
       if (request.method === 'GET' && pathname.startsWith('/image/')) {
         const { recordId, index } = parseAttachmentPath(pathname, 'image');
         if (!recordId) return withCORS(text('Bad index', 400));
+
+        // 1. Try serving from R2 cache first
+        if (env.NETWORK_IMAGES_BUCKET) {
+            const key = `images/${recordId}/${index}/w400-webp`;
+            const obj = await env.NETWORK_IMAGES_BUCKET.get(key);
+            if (obj) {
+                return withCORS(new Response(obj.body, {
+                    headers: { 
+                        'Content-Type': 'image/webp', 
+                        'Cache-Control': 'public, max-age=604800, immutable' 
+                    }
+                }));
+            }
+        }
+        // 2. Fallback to Airtable redirect
         return withCORS(await handleAttachmentRedirect(env, recordId, index, 'Image'));
       }
 
@@ -163,7 +185,7 @@ export default {
   }
 };
 
-/* ---------------- Airtable fetch (same as before) ---------------- */
+/* ---------------- Airtable fetch ---------------- */
 
 async function fetchAllRecords(env) {
   const all = [];
@@ -193,13 +215,12 @@ async function fetchRecordById(env, recordId) {
   return res.json();
 }
 
-/* ---------------- R2 prewarm helpers (resize to 400px WebP) ---------------- */
+/* ---------------- R2 prewarm helpers ---------------- */
 
 function r2KeyForImage(recordId, index, variant = 'w400-webp') {
   return `images/${recordId}/${index}/${variant}`;
 }
 
-// Limit concurrent fetches to avoid long Worker execution
 async function withConcurrency(items, limit, fn) {
   const results = [];
   let i = 0;
@@ -213,9 +234,8 @@ async function withConcurrency(items, limit, fn) {
   return results;
 }
 
-// For a single record, prewarm up to N attachments for a given field (Photo or Image)
 async function prewarmAttachments(env, recordId, fieldArray, maxCount = 6) {
-  if (!env.NETWORK_IMAGES_BUCKET) return; // R2 binding optional; skip if missing
+  if (!env.NETWORK_IMAGES_BUCKET) return; 
   if (!Array.isArray(fieldArray) || fieldArray.length === 0) return;
 
   const tasks = fieldArray.slice(0, maxCount).map((att, idx) => ({ att, idx }));
@@ -233,7 +253,6 @@ async function prewarmAttachments(env, recordId, fieldArray, maxCount = 6) {
     });
     if (!response.ok) return;
 
-    // Store to R2 under stable key
     const key = r2KeyForImage(recordId, idx, 'w400-webp');
     await env.NETWORK_IMAGES_BUCKET.put(key, response.body, {
       httpMetadata: { contentType: 'image/webp', cacheControl: 'public, max-age=604800, immutable' }
@@ -241,9 +260,7 @@ async function prewarmAttachments(env, recordId, fieldArray, maxCount = 6) {
   });
 }
 
-// Prewarm all records' Photo/Image attachments
 async function prewarmAll(env, records) {
-  // small batches to keep request time under control
   for (const r of records) {
     const f = r.fields || {};
     const photoField = f['Photo'];
@@ -266,7 +283,7 @@ async function prewarmAll(env, records) {
   }
 }
 
-/* ---------------- Image proxy (short-lived in-memory cache) ---------------- */
+/* ---------------- Image proxy ---------------- */
 
 const urlCache = new Map();
 const CACHE_TTL_MS = 8 * 60 * 1000;
@@ -294,13 +311,13 @@ async function handleAttachmentRedirect(env, recordId, index, fieldName) {
 }
 
 function parseAttachmentPath(pathname, prefix) {
-  const parts = pathname.split('/'); // ["", "img|image", recordId, index]
+  const parts = pathname.split('/');
   const recordId = parts[2];
   const index = Number(parts[3]);
   return { recordId, index };
 }
 
-/* ---------------- Normalizers (unchanged) ---------------- */
+/* ---------------- Normalizers ---------------- */
 
 function parseGeometry(raw) {
   if (!raw) return null;
