@@ -229,7 +229,7 @@ export default {
       }
 
       // ========================================================================
-      // Personal Prayer Routes (Preserved from earlier)
+      // Personal Prayer Routes (Preserved)
       // ========================================================================
 
       if (url.pathname === "/submit-prayer" && request.method === "POST") {
