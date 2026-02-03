@@ -137,7 +137,7 @@ export default {
             "Leader Name": leader.name,
             "Email": leader.email,
             "Phone": leader.phone,
-            "Organization": [finalChurchId] 
+            "Leads Church": [finalChurchId] 
           });
           finalLeaderId = newLeaderRecord.id;
         }
