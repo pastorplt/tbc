@@ -1,14 +1,22 @@
+name: Deploy Prayer App
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'tbc-workers-monorepo/workers/prayer-app/**'
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+      
       - name: Deploy Worker
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           workingDirectory: 'tbc-workers-monorepo/workers/prayer-app'
-        # ADD THIS SECTION BELOW:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }} # Optional, sometimes needed
