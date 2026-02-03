@@ -21,7 +21,28 @@ export default {
 
     if (request.method === "OPTIONS") return new Response(null, { headers });
 
-    // Helper: Fetch all records (pagination)
+    // --- Helpers ---
+
+    // 1. Generic function to create a record in any table
+    async function createRecord(tableName, fields) {
+      const endpoint = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}`;
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { 
+          Authorization: `Bearer ${AIRTABLE_API_KEY}`, 
+          "Content-Type": "application/json" 
+        },
+        body: JSON.stringify({ records: [{ fields }] })
+      });
+      
+      const data = await res.json();
+      if (!res.ok || !data.records || !data.records.length) {
+        throw new Error(`Airtable Create Error (${tableName}): ${JSON.stringify(data.error || data)}`);
+      }
+      return data.records[0];
+    }
+
+    // 2. Fetch all records (pagination)
     async function fetchAllRecords(tableName, nameField) {
       let allRecords = [];
       let offset = "";
@@ -42,9 +63,9 @@ export default {
       return allRecords;
     }
 
-    // Helper: Find or Create Record
+    // 3. Find or Create Record (Used by legacy /submit-church-prayer)
     async function findOrCreate(tableName, nameField, nameValue) {
-      // 1. Search
+      // Search
       const filterFormula = `{${nameField}} = '${nameValue.replace(/'/g, "\\'")}'`;
       const searchUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}?filterByFormula=${encodeURIComponent(filterFormula)}&maxRecords=1`;
       const searchRes = await fetch(searchUrl, { headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` } });
@@ -54,7 +75,7 @@ export default {
         return searchData.records[0].id;
       }
 
-      // 2. Create if not found
+      // Create if not found
       const createRes = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}`, {
         method: "POST",
         headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}`, "Content-Type": "application/json" },
@@ -70,7 +91,70 @@ export default {
     }
 
     try {
-      // --- Endpoints ---
+      // ========================================================================
+      // NEW ROUTE: /app-submit-prayer (Complex Relational Insert)
+      // ========================================================================
+      if (url.pathname === "/app-submit-prayer" && request.method === "POST") {
+        const body = await request.json();
+        const { networkId, church, leader, request: requestText } = body;
+
+        // Basic Validation
+        if (!networkId || !church || !leader || !requestText) {
+          return new Response(JSON.stringify({ error: "Missing required fields (networkId, church, leader, request)" }), { status: 400, headers });
+        }
+
+        // 1. Resolve Church (Organization)
+        let finalChurchId = null;
+        
+        if (!church.isNew) {
+          // Use existing ID
+          finalChurchId = church.id;
+        } else {
+          // Create new Organization
+          const newOrgRecord = await createRecord(ORGANIZATIONS_TABLE_NAME, {
+            "Org Name": church.name,
+            "Address": church.address,       // Confirmed: "Address" (not Full Address)
+            "Org Type": church.type,         // Confirmed: "Org Type" (not Organization Type)
+            "Network": [networkId]
+          });
+          finalChurchId = newOrgRecord.id;
+        }
+
+        // 2. Resolve Leader
+        let finalLeaderId = null;
+
+        if (!leader.isNew) {
+          // Use existing ID
+          finalLeaderId = leader.id;
+        } else {
+          // Create new Leader
+          const newLeaderRecord = await createRecord(LEADERS_TABLE_NAME, {
+            "Leader Name": leader.name,
+            "Email": leader.email,
+            "Phone": leader.phone,
+            "Organization": [finalChurchId]  // Linking leader to the created/existing church
+          });
+          finalLeaderId = newLeaderRecord.id;
+        }
+
+        // 3. Create Prayer Request
+        await createRecord(IN_PRAYER_REQUESTS_TABLE_NAME, {
+          "Network": [networkId],
+          "Organization": [finalChurchId],
+          "Leader": [finalLeaderId],
+          "Request": requestText
+        });
+
+        return new Response(JSON.stringify({ 
+          success: true, 
+          churchId: finalChurchId, 
+          leaderId: finalLeaderId 
+        }), { headers });
+      }
+
+      // ========================================================================
+      // Existing Routes (Reference Data & Legacy)
+      // ========================================================================
 
       // 1. Get Leaders
       if (url.pathname === "/get-leaders") {
@@ -84,13 +168,13 @@ export default {
         return new Response(JSON.stringify(networks), { headers });
       }
 
-      // 3. Get Organizations (Updated to use "Org Name")
+      // 3. Get Organizations
       if (url.pathname === "/get-organizations") {
         const orgs = await fetchAllRecords(ORGANIZATIONS_TABLE_NAME, "Org Name");
         return new Response(JSON.stringify(orgs), { headers });
       }
 
-      // 4. Submit Church Prayer
+      // 4. Submit Church Prayer (Legacy / Original simple route)
       if (url.pathname === "/submit-church-prayer" && request.method === "POST") {
         const body = await request.json();
         const { networkName, organizationName, leaderName, prayerRequest } = body;
@@ -144,7 +228,10 @@ export default {
         return new Response(JSON.stringify({ status: "Saved" }), { headers });
       }
 
-      // --- Original Personal Prayer Routes (Preserved) ---
+      // ========================================================================
+      // Personal Prayer Routes (Preserved)
+      // ========================================================================
+
       if (url.pathname === "/submit-prayer" && request.method === "POST") {
         const body = await request.json();
         const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(PRAYER_REQUESTS_TABLE)}`, {
@@ -197,18 +284,19 @@ export default {
 
       if (url.pathname === "/archive-prayer" && request.method === "POST") {
         const body = await request.json();
-        const res = await fetch(`https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(PRAYER_REQUESTS_TABLE)}/${body.prayerRequestId}`, {
+        const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(PRAYER_REQUESTS_TABLE)}/${body.prayerRequestId}`, {
           method: "PATCH",
-          headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY}`, "Content-Type": "application/json" },
+          headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({ fields: { "Status": "Archived" } })
         });
         if (!res.ok) throw new Error(`Airtable Archive error: ${res.statusText}`);
         return new Response(JSON.stringify({ success: true }), { headers });
       }
-      
+
     } catch (err) {
       return new Response(JSON.stringify({ error: err.message }), { status: 500, headers });
     }
+    
     return new Response(JSON.stringify({ error: "Route Not Found" }), { status: 404, headers });
   }
 };
