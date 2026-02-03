@@ -113,8 +113,8 @@ export default {
           // Create new Organization
           const newOrgRecord = await createRecord(ORGANIZATIONS_TABLE_NAME, {
             "Org Name": church.name,
-            "Address": church.address,       // Confirmed: "Address" (not Full Address)
-            "Org Type": church.type,         // Confirmed: "Org Type" (not Organization Type)
+            "Address": church.address,       // Corrected from Full Address
+            "Org Type": church.type,         // Corrected from Organization Type
             "Network": [networkId]
           });
           finalChurchId = newOrgRecord.id;
