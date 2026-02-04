@@ -1,18 +1,14 @@
 // Static publishing model for your network map
 // Routes:
-//   GET  /networks.geojson         -> serve latest from R2 (404 until first publish)
+//   GET  /networks.geojson         -> serve latest from R2
 //   POST /admin/regenerate         -> (Bearer REGEN_TOKEN) rebuild from Airtable and publish to R2
 //
 // Requires (Settings → Variables/Secrets):
-//   AIRTABLE_TOKEN
-//   AIRTABLE_BASE_ID
-//   NETWORKS_TABLE_NAME
-//   (optional) AIRTABLE_VIEW_NAME
-//   REGEN_TOKEN 
+//   AIRTABLE_TOKEN, AIRTABLE_BASE_ID, NETWORKS_TABLE_NAME, REGEN_TOKEN
 //
 // Requires (Settings → Bindings → R2 bucket):
-//   Binding name: NETWORK_MAP_BUCKET  (points to your R2 bucket)
-//   The object key used: latest.geojson
+//   NETWORK_MAP_BUCKET (latest.geojson)
+//   NETWORK_IMAGES_BUCKET (images/...)
 
 export default {
   async fetch(request, env, ctx) {
@@ -24,6 +20,7 @@ export default {
     }
 
     try {
+      // 1. GET GeoJSON
       if (request.method === 'GET' && (pathname === '/networks.geojson' || pathname === '/networks/polygons.geojson')) {
         const obj = await env.NETWORK_MAP_BUCKET.get('latest.geojson');
         if (!obj) return withCORS(json({ error: 'GeoJSON not generated yet' }, 404));
@@ -35,60 +32,59 @@ export default {
         }));
       }
 
+      // 2. REGENERATE (Admin)
       if (request.method === 'POST' && (pathname === '/admin/regenerate' || pathname === '/networks/admin/regenerate')) {
         const token = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
         if (!token || token !== env.REGEN_TOKEN) {
           return withCORS(json({ error: 'Unauthorized' }, 401));
         }
 
+        // Fetch data
         const records = await fetchAllRecords(env);
         
-        // This will now actually work because the binding exists!
-        await prewarmAll(env, records);
+        // --- OPTIMIZATION: Background Image Processing ---
+        // We move this to the background using ctx.waitUntil so the HTTP response
+        // returns immediately and the worker doesn't time out while processing images.
+        if (env.NETWORK_IMAGES_BUCKET) {
+            ctx.waitUntil(prewarmAll(env, records));
+        }
+        // -------------------------------------------------
 
         const origin = new URL(request.url).origin;
-
         const features = [];
+
         for (const r of records) {
           const f = r.fields || {};
           const geometry = parseGeometry(f['Polygon']);
           if (!geometry) continue;
 
           const leaders = normalizeLeaders(f['Network Leaders Names']) || '';
-          const allPrayerRequests = normalizeTextField(
-            f['All Prayer Requests'] ?? f['All Prayer Request'] ?? f['Prayer Requests']
-          );
+          const allPrayerRequests = normalizeTextField(f['All Prayer Requests'] ?? f['All Prayer Request'] ?? f['Prayer Requests']);
           const latestPrayerRequest = normalizeTextField(f['Latest Prayer Request']);
           const canonicalPrayerRequest = allPrayerRequests || latestPrayerRequest;
 
           let photoUrls = [];
           const photoField = f['Photo'];
-          const isPhotoAttachmentArray =
-            Array.isArray(photoField) && photoField.length > 0 &&
-            typeof photoField[0] === 'object' && (photoField[0]?.url || photoField[0]?.thumbnails);
-
-          if (isPhotoAttachmentArray) {
+          // Check if field has actual attachment objects
+          if (Array.isArray(photoField) && typeof photoField[0] === 'object' && (photoField[0]?.url || photoField[0]?.thumbnails)) {
+            // Use local proxy URL
             photoUrls = photoField.slice(0, 6).map((_, idx) => `${origin}/img/${r.id}/${idx}`);
           } else {
+            // It's a string/text field
             photoUrls = [...new Set(collectPhotoUrls(photoField).map(normalizeUrl))].slice(0, 6);
           }
 
           let imageUrls = [];
           const imageField = f['Image'];
-          const isImageAttachmentArray =
-            Array.isArray(imageField) && imageField.length > 0 &&
-            typeof imageField[0] === 'object' && (imageField[0]?.url || imageField[0]?.thumbnails);
-
-          if (isImageAttachmentArray) {
+          if (Array.isArray(imageField) && typeof imageField[0] === 'object' && (imageField[0]?.url || imageField[0]?.thumbnails)) {
+            // Use local proxy URL
             imageUrls = imageField.slice(0, 6).map((_, idx) => `${origin}/image/${r.id}/${idx}`);
           } else {
             imageUrls = [...new Set(collectPhotoUrls(imageField).map(normalizeUrl))].slice(0, 6);
           }
 
-          const [photo1 = '', photo2 = '', photo3 = '', photo4 = '', photo5 = '', photo6 = ''] = photoUrls;
-          const [image1 = '', image2 = '', image3 = '', image4 = '', image5 = '', image6 = ''] = imageUrls;
-          const photo_count = photoUrls.filter(Boolean).length;
-          const image_count = imageUrls.filter(Boolean).length;
+          const [photo1='', photo2='', photo3='', photo4='', photo5='', photo6=''] = photoUrls;
+          const [image1='', image2='', image3='', image4='', image5='', image6=''] = imageUrls;
 
           features.push({
             type: 'Feature',
@@ -97,7 +93,7 @@ export default {
               id: r.id,
               name: f['Network Name'] ?? '',
               leaders,
-              contact_email: normalizeTextField(f['contact email'] ?? f['Contact Email'] ?? f['Contact email']),
+              contact_email: normalizeTextField(f['contact email'] ?? f['Contact Email']),
               status: normalizeTextField(f['Status']),
               county: normalizeTextField(f['County']),
               tags: normalizeTextField(f['Tags']),
@@ -108,9 +104,9 @@ export default {
               prayer_request: canonicalPrayerRequest,
               prayer_requests: canonicalPrayerRequest,
               photo1, photo2, photo3, photo4, photo5, photo6,
-              photo_count,
+              photo_count: photoUrls.filter(Boolean).length,
               image1, image2, image3, image4, image5, image6,
-              image_count,
+              image_count: imageUrls.filter(Boolean).length,
             },
           });
         }
@@ -127,16 +123,17 @@ export default {
         return withCORS(json({
           ok: true,
           features: features.length,
-          updatedAt: new Date().toISOString()
+          updatedAt: new Date().toISOString(),
+          note: "Image optimization running in background"
         }));
       }
 
-      // --- UPDATED IMAGE HANDLERS ---
+      // 3. IMAGE PROXY: /img/
       if (request.method === 'GET' && pathname.startsWith('/img/')) {
         const { recordId, index } = parseAttachmentPath(pathname, 'img');
         if (!recordId) return withCORS(text('Bad index', 400));
         
-        // 1. Try serving from R2 cache first
+        // Try serving from R2 cache first
         if (env.NETWORK_IMAGES_BUCKET) {
             const key = `images/${recordId}/${index}/w400-webp`;
             const obj = await env.NETWORK_IMAGES_BUCKET.get(key);
@@ -149,15 +146,16 @@ export default {
                 }));
             }
         }
-        // 2. Fallback to Airtable redirect
+        // Fallback to Airtable redirect
         return withCORS(await handleAttachmentRedirect(env, recordId, index, 'Photo'));
       }
 
+      // 4. IMAGE PROXY: /image/
       if (request.method === 'GET' && pathname.startsWith('/image/')) {
         const { recordId, index } = parseAttachmentPath(pathname, 'image');
         if (!recordId) return withCORS(text('Bad index', 400));
 
-        // 1. Try serving from R2 cache first
+        // Try serving from R2 cache first
         if (env.NETWORK_IMAGES_BUCKET) {
             const key = `images/${recordId}/${index}/w400-webp`;
             const obj = await env.NETWORK_IMAGES_BUCKET.get(key);
@@ -170,10 +168,11 @@ export default {
                 }));
             }
         }
-        // 2. Fallback to Airtable redirect
+        // Fallback to Airtable redirect
         return withCORS(await handleAttachmentRedirect(env, recordId, index, 'Image'));
       }
 
+      // Root check
       if (request.method === 'GET' && pathname === '/') {
         return withCORS(text('OK'));
       }
@@ -240,11 +239,13 @@ async function prewarmAttachments(env, recordId, fieldArray, maxCount = 6) {
 
   const tasks = fieldArray.slice(0, maxCount).map((att, idx) => ({ att, idx }));
 
+  // Resize up to 4 images concurrently per record
   await withConcurrency(tasks, 4, async ({ att, idx }) => {
     const srcUrl = pickAttachmentUrl(att);
     if (!srcUrl) return;
 
-    // Resize at edge to 400px webp
+    // Resize at edge to 400px webp using Cloudflare Image Resizing
+    // Note: Requires Cloudflare Images or Pro plan. If fails, it just won't cache.
     const response = await fetch(srcUrl, {
       cf: {
         cacheEverything: true,
@@ -260,30 +261,30 @@ async function prewarmAttachments(env, recordId, fieldArray, maxCount = 6) {
   });
 }
 
+// --- OPTIMIZED PREWARM FUNCTION ---
+// Replaces previous loop-based approach to improve speed
 async function prewarmAll(env, records) {
-  for (const r of records) {
+  // Process records in parallel batches of 10
+  // This helps complete the job before the worker CPU time limit is reached.
+  await withConcurrency(records, 10, async (r) => {
     const f = r.fields || {};
     const photoField = f['Photo'];
     const imageField = f['Image'];
 
-    const isPhotoAttachmentArray =
-      Array.isArray(photoField) && photoField.length > 0 &&
-      typeof photoField[0] === 'object' && (photoField[0]?.url || photoField[0]?.thumbnails);
+    // Check if fields are actually attachments (array of objects)
+    const isPhotoArr = Array.isArray(photoField) && typeof photoField[0] === 'object' && (photoField[0]?.url || photoField[0]?.thumbnails);
+    const isImageArr = Array.isArray(imageField) && typeof imageField[0] === 'object' && (imageField[0]?.url || imageField[0]?.thumbnails);
 
-    const isImageAttachmentArray =
-      Array.isArray(imageField) && imageField.length > 0 &&
-      typeof imageField[0] === 'object' && (imageField[0]?.url || imageField[0]?.thumbnails);
-
-    if (isPhotoAttachmentArray) {
+    if (isPhotoArr) {
       await prewarmAttachments(env, r.id, photoField, 6);
     }
-    if (isImageAttachmentArray) {
+    if (isImageArr) {
       await prewarmAttachments(env, r.id, imageField, 6);
     }
-  }
+  });
 }
 
-/* ---------------- Image proxy ---------------- */
+/* ---------------- Image proxy cache ---------------- */
 
 const urlCache = new Map();
 const CACHE_TTL_MS = 8 * 60 * 1000;
