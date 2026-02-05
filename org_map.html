@@ -102,6 +102,14 @@
 
     .popup hr { border:0; border-top:1px solid #e9ecef; margin:8px 0; }
 
+    /* Org Logo in Popup */
+    .org-logo-wrap {
+      text-align: center; margin-bottom: 12px; border-bottom: 1px solid #e9ecef; padding-bottom: 12px;
+    }
+    .org-logo {
+      max-width: 140px; max-height: 80px; object-fit: contain; display: block; margin: 0 auto;
+    }
+
     /* Show toggle on ALL viewports */
     .legend-toggle {
       display: inline-flex; align-items: center; justify-content: center;
@@ -233,8 +241,8 @@
     const datasetStatusEl = document.getElementById('datasetStatus');
 
     let allFeatures = [];
-    let featureMap = new Map(); // Store features by ID for fast lookup
-    let markersMap = new Map(); // Store markers by feature ID
+    let featureMap = new Map(); 
+    let markersMap = new Map(); 
     let FIELDS = {};
     let preselectApplied = false;
     let initialParamsHandled = false;
@@ -250,7 +258,7 @@
       const byNorm = new Map(keys.map(k => [normKey(k), k]));
       const pick = (...c) => { for (const cand of c) { const k = normKey(cand); if (byNorm.has(k)) return byNorm.get(k); } for (const [nk, orig] of byNorm.entries()) if (c.some(cand => nk.includes(normKey(cand)))) return orig; return null; };
       return {
-        id: "id", // assume ID is always 'id' in GeoJSON
+        id: "id",
         name: pick("Organization Name","Org Name","Name","organization_name"),
         website: pick("Website","URL","Link","website"),
         category: pick("Category","Categories","category"),
@@ -259,7 +267,8 @@
         address: pick("Full Address","Address","full_address"),
         county: pick("County","county"),
         network: pick("Network Name","Network","network_name"),
-        prayer: pick("Latest Prayer Request", "prayer_request", "prayer")
+        prayer: pick("Latest Prayer Request", "prayer_request", "prayer"),
+        logo: pick("logo", "logo_url", "Org Logo")
       };
     }
 
@@ -271,7 +280,6 @@
     function hashIndex(str, m){ let h=0; for(let i=0;i<str.length;i++) h=(h*31 + str.charCodeAt(i))|0; return Math.abs(h)%m; }
     function colorForFeature(props) { const key = `${props[FIELDS.name]||''}|${props[FIELDS.address]||''}`; return palette30[ hashIndex(key, palette30.length) ]; }
 
-    // Global tag→color map
     const GLOBAL_TAG_COLORS = new Map();
     const GROUP_ORDER = ['type','county','network','category','denomination'];
 
@@ -381,7 +389,6 @@
       return datasetCache.get(key);
     }
 
-    // === Church icon ===
     function churchSVG(color, size=20){
       const s = Number(size) || 20;
       return `\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="${s}" height="${s}" aria-hidden="true">\n  <path d="M7 10 L12 4 L17 10 L17 18 L7 18 Z" fill="${color}"/>\n</svg>`;
@@ -391,7 +398,6 @@
       return L.divIcon({ html, className: 'church-marker', iconSize: [20, 20], iconAnchor: [10, 18], popupAnchor: [0, -18] });
     }
 
-    // ===== UI builders =====
     function buildTagList(container, tags, groupKey) {
       container.innerHTML = "";
       tags.forEach(tag => {
@@ -502,12 +508,13 @@
       return `<div class="tag-strip">${chips.join('')}</div>`;
     }
 
-    // UPDATED: Show prayer request if present
+    // UPDATED: Show Logo if present
     function infoHtml(props) {
       const name = props[FIELDS.name] || "(No name)";
       const website = props[FIELDS.website];
       const address = props[FIELDS.address];
       const prayerRequest = props[FIELDS.prayer];
+      const logoUrl = props[FIELDS.logo];
 
       let prayerHtml = '';
       if (prayerRequest && String(prayerRequest).trim()) {
@@ -517,7 +524,15 @@
         </div>`;
       }
 
+      let logoHtml = '';
+      if (logoUrl) {
+        logoHtml = `<div class="org-logo-wrap">
+          <img src="${logoUrl}" alt="${name} logo" class="org-logo" loading="lazy">
+        </div>`;
+      }
+
       return `<div class="popup">
+        ${logoHtml}
         <h3>${name}</h3>
         ${address ? `<div class="field-row"><b>Address:</b> ${address}</div>` : ""}
         ${website ? `<div class="field-row"><b>Website:</b> <a href="${website}" target="_blank" rel="noopener">${website}</a></div>` : ""}
@@ -551,7 +566,6 @@
         const icon = makeChurchIcon(color);
         const m = L.marker([lat, lng], { icon });
 
-        // Store in map for deep linking
         const recId = props.id;
         if (recId) markersMap.set(recId, { marker: m, props });
 
@@ -611,7 +625,6 @@
       });
     }
 
-    // ===== Deep Linking & Random Logic =====
     function handleInitialUrlParams() {
       if (initialParamsHandled || allFeatures.length === 0) return;
       initialParamsHandled = true;
@@ -621,14 +634,12 @@
       const targetOrg = params.get('org');
       const randomMode = params.get('random');
 
-      // 1. Zoom to ID
       if (targetId && markersMap.has(targetId)) {
         const { marker, props } = markersMap.get(targetId);
         openAndZoom(marker, props);
         return;
       }
 
-      // 2. Zoom to Org Name (fuzzy match)
       if (targetOrg) {
         const targetName = targetOrg.toLowerCase().trim();
         const match = allFeatures.find(f => {
@@ -642,21 +653,15 @@
         }
       }
 
-      // 3. Random Mode
       if (randomMode) {
         let candidates = allFeatures;
         
-        // random=2: Only organizations with a prayer request
         if (randomMode === '2') {
           candidates = allFeatures.filter(f => {
             const req = f.properties[FIELDS.prayer];
             return req && String(req).trim().length > 0;
           });
-          // Fallback: if none found, do nothing (user requested behavior)
-          if (candidates.length === 0) {
-            console.log("No organizations with prayer requests found.");
-            return; 
-          }
+          if (candidates.length === 0) return; 
         }
 
         if (candidates.length > 0) {
@@ -664,7 +669,6 @@
           const recId = pick.properties.id;
           if (recId && markersMap.has(recId)) {
             const { marker, props } = markersMap.get(recId);
-            // Give map a moment to render bounds before zooming
             setTimeout(() => openAndZoom(marker, props), 200);
           }
         }
@@ -674,7 +678,7 @@
     function openAndZoom(marker, props) {
       if (!marker) return;
       const latLng = marker.getLatLng();
-      map.setView(latLng, 16, { animate: true }); // Zoom level 16 for detail
+      map.setView(latLng, 16, { animate: true });
       
       const html = infoHtml(props);
       if (isMobile()) {
@@ -684,7 +688,6 @@
       }
     }
 
-    // ===== Bootstrap =====
     function preselectFromParams() {
       const params = new URLSearchParams(location.search);
       const preCounty = (params.get('county')||'').split(',').map(s=>s.trim()).filter(Boolean);
@@ -704,7 +707,6 @@
       FIELDS = resolveFieldsFromSample(sampleProps || {});
       computeGlobalTagColors(allFeatures);
 
-      // Build filters (County, Network, etc.)
       const countyList = el('#list-county');
       if (countyList) buildTagList(countyList, FIELDS.county ? uniqueSortedTags(allFeatures, FIELDS.county) : [], 'county');
 
@@ -745,14 +747,10 @@
         drawMarkers(filterFeaturesBySelections(previousSelections));
       } else {
         drawMarkers(allFeatures);
-        
-        // Initial URL logic (only runs once)
         if (!preselectApplied) {
           preselectFromParams();
           preselectApplied = true;
         }
-        
-        // Trigger Deep Links / Random mode after markers are drawn
         handleInitialUrlParams();
       }
     }
@@ -823,7 +821,6 @@
     el("#applyFilters").addEventListener("click", applyFilters);
     el("#clearFilters").addEventListener("click", clearFilters);
 
-    // Legend interactions
     const legendPanel = document.getElementById('legendPanel');
     const legendToggle = document.getElementById('legendToggle');
     const legendClose = document.getElementById('legendClose');
@@ -841,7 +838,6 @@
     });
     if (legendClose) legendClose.addEventListener('click', closeLegend);
 
-    // Keep popup interactions from bubbling; desktop uses Leaflet popup only
     map.on('popupopen', (e) => {
       const el = e.popup && e.popup.getElement && e.popup.getElement();
       if (!el) return; try { L.DomEvent.disableClickPropagation(el); L.DomEvent.disableScrollPropagation(el); } catch {}
