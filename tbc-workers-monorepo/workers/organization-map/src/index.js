@@ -1,21 +1,11 @@
 // organizations-map worker
-// Routes you attach to this Worker:
-//   GET  /orgs               -> list available GeoJSON files
-//   GET  /orgs/<geojson-file>.geojson
-//   POST /orgs/admin/regenerate
-//   POST /orgs/admin/delete
-//   GET  /orgs/ok
-//
-// Env vars (Settings → Variables/Secrets):
-//   AIRTABLE_TOKEN, AIRTABLE_BASE_ID, REGEN_TOKEN
-//   ORG_TABLE_NAME (default "Master List")
-//   ORG_GEOJSON_FILE (default "organization_map.geojson")
-//   FIELD_LAT (default "Latitude"), FIELD_LON (default "Longitude")
-//   (optional) AIRTABLE_VIEW_NAME
-//   (optional) AIRTABLE_PAGE_LIMIT (default 10 pages per request)
-//
-// R2 binding (Settings → Bindings → R2):
-//   ORG_MAP_BUCKET  -> your bucket (object key: configurable via ORG_GEOJSON_FILE)
+// Routes:
+//   GET  /orgs                           -> list available GeoJSON files
+//   GET  /orgs/<file>.geojson            -> serve specific file
+//   GET  /orgs/img/<id>/<index>          -> serve logo image (from R2 or redirect)
+//   POST /orgs/admin/regenerate          -> (Bearer REGEN_TOKEN) rebuild data + prewarm images
+//   POST /orgs/admin/delete              -> delete file
+//   GET  /orgs/ok                        -> health check
 
 export default {
   async fetch(request, env) {
@@ -26,13 +16,36 @@ export default {
     try {
       const objectKey = getGeoJsonKey(env);
 
-      // List available GeoJSON files
+      // 1. Image Serving Route (New)
+      // Matches /orgs/img/rec12345/0
+      if (request.method === "GET" && pathname.startsWith("/orgs/img/")) {
+        const { recordId, index } = parseAttachmentPath(pathname, "/orgs/img");
+        if (!recordId) return withCORS(json({ error: "Invalid image path" }, 400));
+
+        // Try R2 cache first
+        if (env.ORG_IMAGES_BUCKET) {
+          const key = `org-logos/${recordId}/${index}/w400-webp`;
+          const obj = await env.ORG_IMAGES_BUCKET.get(key);
+          if (obj) {
+            return withCORS(new Response(obj.body, {
+              headers: { 
+                "Content-Type": "image/webp", 
+                "Cache-Control": "public, max-age=604800, immutable" 
+              }
+            }));
+          }
+        }
+        // Fallback to Airtable redirect if R2 misses
+        return withCORS(await handleAttachmentRedirect(env, recordId, index, "Org Logo"));
+      }
+
+      // 2. List GeoJSON files
       if (request.method === "GET" && (pathname === "/orgs" || pathname === "/orgs/")) {
         const files = await listAllGeoJson(env.ORG_MAP_BUCKET);
         return withCORS(json({ files }));
       }
 
-      // Serve the latest generated GeoJSON from R2
+      // 3. Serve GeoJSON
       if (
         request.method === "GET" &&
         pathname.startsWith("/orgs/") &&
@@ -42,7 +55,7 @@ export default {
         const requestedKey = pathname.replace(/^\/orgs\//, "");
         if (!isSafeKey(requestedKey)) return withCORS(json({ error: "Invalid GeoJSON file name" }, 400));
         const obj = await env.ORG_MAP_BUCKET.get(requestedKey);
-        if (!obj) return withCORS(json({ error: "Organization GeoJSON not generated yet", key: requestedKey }, 404));
+        if (!obj) return withCORS(json({ error: "File not found", key: requestedKey }, 404));
         return withCORS(new Response(obj.body, {
           headers: {
             "Content-Type": "application/geo+json; charset=utf-8",
@@ -52,7 +65,7 @@ export default {
         }));
       }
 
-      // Regenerate from Airtable -> write to R2
+      // 4. Regenerate (Admin)
       if (request.method === "POST" && pathname === "/orgs/admin/regenerate") {
         const token = (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
         if (!token || token !== env.REGEN_TOKEN) return withCORS(json({ error: "Unauthorized" }, 401));
@@ -60,6 +73,7 @@ export default {
         const tableName = env.ORG_TABLE_NAME || "Master List";
         const fieldLat  = env.FIELD_LAT || "Latitude";
         const fieldLon  = env.FIELD_LON || "Longitude";
+        const origin    = new URL(request.url).origin;
 
         if (!isSafeKey(objectKey)) throw new Error("Invalid GeoJSON file name");
 
@@ -94,7 +108,7 @@ export default {
 
         const startCursor = payload.cursor != null ? payload.cursor : state.cursor;
 
-        // UPDATED: Added "Latest Prayer Request" to the fetch list
+        // Fetch chunk from Airtable
         const { records, nextCursor, pagesUsed } = await fetchAirtableChunk(env, tableName, [
           fieldLat, fieldLon,
           "Org Name",
@@ -105,18 +119,26 @@ export default {
           "Address",
           "County",
           "Network Name",
-          "Latest Prayer Request"
+          "Latest Prayer Request",
+          "Org Logo" // Added field
         ], { offset: startCursor || undefined, maxPages: MAX_PAGES });
 
-        const features = recordsToFeatures(records, { fieldLat, fieldLon });
+        // Prewarm images for this chunk before saving
+        if (records.length > 0 && env.ORG_IMAGES_BUCKET) {
+          await prewarmChunkImages(env, records, "Org Logo");
+        }
+
+        const features = recordsToFeatures(records, { fieldLat, fieldLon, origin });
         const processed = features.length;
 
         if (nextCursor) {
+          // Save chunk
           const chunkKey = `orgs/tmp/${jobId}/chunk-${String(state.chunkCount + 1).padStart(4, "0")}.json`;
           await env.ORG_MAP_BUCKET.put(chunkKey, JSON.stringify(features), {
             httpMetadata: { contentType: "application/json; charset=utf-8", cacheControl: "no-store" }
           });
 
+          // Update state
           state.cursor = nextCursor;
           state.chunkCount += 1;
           state.chunkKeys.push(chunkKey);
@@ -139,7 +161,7 @@ export default {
           }));
         }
 
-        // Finalize
+        // Finalize: Merge all chunks
         const allFeatures = [];
         if (state.chunkKeys.length) {
           for (const key of state.chunkKeys) {
@@ -174,7 +196,7 @@ export default {
         }));
       }
 
-      // Delete endpoint
+      // 5. Delete
       if (request.method === "POST" && pathname === "/orgs/admin/delete") {
         const token = (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
         if (!token || token !== env.REGEN_TOKEN) return withCORS(json({ error: "Unauthorized" }, 401));
@@ -193,6 +215,7 @@ export default {
         return withCORS(json({ ok: true, deleted: rawKey }));
       }
 
+      // 6. Health check
       if (request.method === "GET" && pathname === "/orgs/ok") {
         return withCORS(textResponse("OK"));
       }
@@ -241,7 +264,150 @@ async function fetchAirtableChunk(env, tableName, fields = [], { offset, maxPage
   return { records, nextCursor: nextOffset, pagesUsed };
 }
 
-/* ---------------- small utils ---------------- */
+async function fetchRecordById(env, recordId, tableName) {
+  // Need table name, usually passed in env or default
+  const table = env.ORG_TABLE_NAME || "Master List";
+  const url = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(table)}/${recordId}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${env.AIRTABLE_TOKEN}` } });
+  if (!res.ok) throw new Error(`Airtable error ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+/* ---------------- Image Prewarming & Handling ---------------- */
+
+// Save image to R2: org-logos/<recordId>/<index>/w400-webp
+async function prewarmChunkImages(env, records, fieldName) {
+  const tasks = [];
+  for (const r of records) {
+    const attachments = r.fields[fieldName];
+    if (Array.isArray(attachments) && attachments.length > 0) {
+      // Process only the first image (index 0) to save resources, or loop if you want multiple
+      const att = attachments[0];
+      tasks.push({ recordId: r.id, index: 0, att });
+    }
+  }
+
+  // Process in parallel with concurrency limit
+  await withConcurrency(tasks, 4, async ({ recordId, index, att }) => {
+    const srcUrl = pickAttachmentUrl(att);
+    if (!srcUrl) return;
+
+    const key = `org-logos/${recordId}/${index}/w400-webp`;
+    
+    // Check if already exists to avoid re-downloading? 
+    // Usually overkill for regen jobs, just overwrite to ensure freshness.
+    
+    const response = await fetch(srcUrl, {
+      cf: {
+        cacheEverything: true,
+        image: { width: 400, format: "webp", quality: 80 }
+      }
+    });
+
+    if (response.ok) {
+      await env.ORG_IMAGES_BUCKET.put(key, response.body, {
+        httpMetadata: { 
+          contentType: "image/webp", 
+          cacheControl: "public, max-age=604800, immutable" 
+        }
+      });
+    }
+  });
+}
+
+async function withConcurrency(items, limit, fn) {
+  const results = [];
+  let i = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) {
+      const cur = i++;
+      try { results[cur] = await fn(items[cur]); } catch (e) { console.error(e); }
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+function pickAttachmentUrl(att) {
+  if (!att) return null;
+  if (typeof att === 'string') return /^https?:\/\//i.test(att) ? att : null;
+  return att?.thumbnails?.large?.url || att?.thumbnails?.full?.url || att?.url || null;
+}
+
+function parseAttachmentPath(pathname, prefix) {
+  // prefix might be /orgs/img
+  const relative = pathname.replace(prefix, ""); // /recXYZ/0
+  const parts = relative.split("/").filter(Boolean);
+  return { recordId: parts[0], index: Number(parts[1] || 0) };
+}
+
+// Redirect fallback if image not in R2
+const urlCache = new Map();
+async function handleAttachmentRedirect(env, recordId, index, fieldName) {
+  const idx = Number(index);
+  if (!Number.isInteger(idx) || idx < 0) return textResponse("Bad index", 400);
+
+  const cacheKey = `${fieldName}:${recordId}:${idx}`;
+  const cached = urlCache.get(cacheKey);
+  if (cached && Date.now() < cached.expires) {
+    return Response.redirect(cached.url, 302);
+  }
+
+  try {
+    const rec = await fetchRecordById(env, recordId);
+    const attachments = rec.fields?.[fieldName];
+    if (!Array.isArray(attachments) || !attachments[idx]) {
+      return textResponse("Image not found", 404);
+    }
+    const url = pickAttachmentUrl(attachments[idx]);
+    if (!url) return textResponse("Invalid URL", 404);
+
+    urlCache.set(cacheKey, { url, expires: Date.now() + 600000 }); // 10 min cache
+    return Response.redirect(url, 302);
+  } catch (e) {
+    return textResponse("Error fetching record", 500);
+  }
+}
+
+/* ---------------- JSON / GeoJSON Builders ---------------- */
+
+function recordsToFeatures(records, { fieldLat, fieldLon, origin }) {
+  const features = [];
+  for (const r of records) {
+    const f = r?.fields || {};
+    const lat = toNum(f[fieldLat]);
+    const lon = toNum(f[fieldLon]);
+    if (!isFinite(lat) || !isFinite(lon)) continue;
+
+    const props = {
+      id: r.id,
+      organization_name: normalizeValue(f["Org Name"]),
+      website:           normalizeValue(f["Website"]),
+      category:          normalizeValue(f["Category"]),
+      denomination:      normalizeValue(f["Denomination"]),
+      organization_type: normalizeValue(f["Org Type"]),
+      full_address:      normalizeValue(f["Address"]),
+      county:            normalizeValue(f["County"]),
+      network_name:      normalizeValue(f["Network Name"]),
+      prayer_request:    normalizeValue(f["Latest Prayer Request"])
+    };
+
+    // Add Logo URL if attachment exists
+    if (Array.isArray(f["Org Logo"]) && f["Org Logo"].length > 0) {
+      // Use the worker route that serves from R2
+      props.logo = `${origin}/orgs/img/${r.id}/0`;
+    }
+
+    features.push({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [lon, lat] },
+      properties: props
+    });
+  }
+  return features;
+}
+
+/* ---------------- Utils ---------------- */
 
 function toNum(v) { if (v == null) return NaN; return Number(typeof v === "string" ? v.trim() : v); }
 
@@ -273,8 +439,7 @@ function json(obj, status = 200) {
 
 function getGeoJsonKey(env) {
   const raw = env.ORG_GEOJSON_FILE;
-  const key = typeof raw === "string" && raw.trim() ? raw.trim() : "organization_map.geojson";
-  return key;
+  return (typeof raw === "string" && raw.trim()) ? raw.trim() : "organization_map.geojson";
 }
 
 function isSafeKey(key) {
@@ -307,52 +472,17 @@ async function readJsonBody(request) {
     const text = await request.text();
     if (!text) return {};
     return JSON.parse(text);
-  } catch {
-    return {};
-  }
+  } catch { return {}; }
 }
 
 async function readState(bucket, key) {
   const obj = await bucket.get(key);
   if (!obj) return null;
-  try {
-    return JSON.parse(await obj.text());
-  } catch {
-    return null;
-  }
+  try { return JSON.parse(await obj.text()); } catch { return null; }
 }
 
 function clampPages(raw) {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return 10;
   return Math.min(20, Math.max(1, Math.floor(n)));
-}
-
-function recordsToFeatures(records, { fieldLat, fieldLon }) {
-  const features = [];
-  for (const r of records) {
-    const f = r?.fields || {};
-    const lat = toNum(f[fieldLat]);
-    const lon = toNum(f[fieldLon]);
-    if (!isFinite(lat) || !isFinite(lon)) continue;
-
-    features.push({
-      type: "Feature",
-      geometry: { type: "Point", coordinates: [lon, lat] },
-      properties: {
-        id: r.id,
-        organization_name: normalizeValue(f["Org Name"]),
-        website:           normalizeValue(f["Website"]),
-        category:          normalizeValue(f["Category"]),
-        denomination:      normalizeValue(f["Denomination"]),
-        organization_type: normalizeValue(f["Org Type"]),
-        full_address:      normalizeValue(f["Address"]),
-        county:            normalizeValue(f["County"]),
-        network_name:      normalizeValue(f["Network Name"]),
-        // UPDATED: Map Latest Prayer Request to prayer_request property
-        prayer_request:    normalizeValue(f["Latest Prayer Request"])
-      }
-    });
-  }
-  return features;
 }
