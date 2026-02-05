@@ -100,26 +100,28 @@
     .org-logo-wrap {
       text-align: center; margin-bottom: 12px; 
       padding: 12px; border-radius: 8px;
-      /* Subtle border for visual bounding box */
-      border: 1px solid #e5e7eb; 
-      background-color: #fff; /* Default background */
-      transition: background-color 0.2s ease;
+      border: 1px solid #d1d5db; 
+      /* DEFAULT: Medium Gray from Brand Kit (safe for white/black/color logos) */
+      background-color: #8B8A87; 
+      transition: background-color 0.3s ease;
     }
     
     .org-logo {
       max-width: 100%; max-height: 80px; object-fit: contain; display: block; margin: 0 auto;
-      /* CSS FIX: Add a drop-shadow. This makes white logos visible on white backgrounds immediately. */
+      /* Keep the drop shadow as a safety net */
       filter: drop-shadow(0 1px 3px rgba(0,0,0,0.3));
     }
     
-    /* Applied when logo is detected as light/white */
+    /* DETECTED: Logo is Light/White -> Use Dark Background */
     .org-logo-wrap.force-dark {
-      background-color: #bf3426 !important; /* TBC Brand Red */
-      border-color: #bf3426;
+      background-color: #2E2E2E !important;
+      border-color: #2E2E2E;
     }
-    /* When force-dark is active, remove the drop-shadow so it looks cleaner */
-    .org-logo-wrap.force-dark .org-logo {
-      filter: none;
+
+    /* DETECTED: Logo is Dark/Black -> Use Light Background */
+    .org-logo-wrap.force-light {
+      background-color: #EFEFEF !important;
+      border-color: #EFEFEF;
     }
 
     /* Legend Toggle */
@@ -289,9 +291,7 @@
 
     function chipsRow(props){ const typeVals = normalizeTags(props[FIELDS.type]); const countyValsRaw = normalizeTags(props[FIELDS.county]); const networkVals = normalizeTags(props[FIELDS.network]); const categoryVals = normalizeTags(props[FIELDS.category]); const denomVals = normalizeTags(props[FIELDS.denomination]); const makeChip = (groupKey, text, displayText) => { const bg = colorForTag(groupKey, text); const fg = contrastText(bg); return `<span class="chip chip-colored" style="background:${bg};color:${fg};">${displayText ?? text}</span>`; }; const chips = [ ...typeVals.map(t => makeChip('type', t)), ...countyValsRaw.map(t => makeChip('county', t, /county\b/i.test(t) ? t : `${t} County`)), ...networkVals.map(t => makeChip('network', t)), ...categoryVals.map(t => makeChip('category', t)), ...denomVals.map(t => makeChip('denomination', t)), ]; if (!chips.length) return ''; return `<div class="tag-strip">${chips.join('')}</div>`; }
 
-    // === Updated Contrast Logic ===
-    // 1. More sensitive analysis (lower alpha threshold)
-    // 2. Calculates Average Luminance
+    // === Updated Contrast Logic with Medium Gray Default ===
     window.detectLogoContrast = function(img) {
       if (img.dataset.checked) return;
       img.dataset.checked = true;
@@ -311,7 +311,7 @@
 
         for (let i = 0; i < data.length; i += (4 * step)) {
           const a = data[i+3];
-          if (a < 50) continue; // Lower threshold to catch faint pixels
+          if (a < 50) continue; // Skip transparency
           
           const r = data[i];
           const g = data[i+1];
@@ -322,9 +322,17 @@
           pixelCount++;
         }
 
-        // If average pixel is very bright (>200), force dark background
-        if (pixelCount > 0 && (totalLum / pixelCount) > 200) {
-          img.parentElement.classList.add('force-dark');
+        if (pixelCount > 0) {
+          const avgLum = totalLum / pixelCount;
+          // > 180: Mostly white/bright logo -> Force Dark BG
+          if (avgLum > 180) {
+            img.parentElement.classList.add('force-dark');
+          } 
+          // < 80: Mostly black/dark logo -> Force Light BG
+          else if (avgLum < 80) {
+            img.parentElement.classList.add('force-light');
+          }
+          // Else: Keep default medium gray (#8B8A87) which works for mixed/color logos
         }
       } catch (e) {
         // console.warn("Canvas reading blocked", e);
@@ -349,15 +357,13 @@
 
       let logoHtml = '';
       if (logoUrl) {
-        // Priority: 
-        // 1. Manual background from Airtable
-        // 2. Client-side auto-detection
         if (logoBg) {
+          // Manual Override
           logoHtml = `<div class="org-logo-wrap" style="background-color:${logoBg}; border-color:${logoBg}">
             <img src="${logoUrl}" alt="${name} logo" class="org-logo" loading="lazy">
           </div>`;
         } else {
-          // Add drop-shadow via CSS class on image (handled in <style>)
+          // Auto Detect with Medium Gray Default
           logoHtml = `<div class="org-logo-wrap">
             <img src="${logoUrl}" alt="${name} logo" class="org-logo" 
                  crossorigin="anonymous" loading="lazy" onload="detectLogoContrast(this)">
