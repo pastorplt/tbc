@@ -100,18 +100,26 @@
     .org-logo-wrap {
       text-align: center; margin-bottom: 12px; 
       padding: 12px; border-radius: 8px;
-      /* Default to subtle border for white-on-white handling */
+      /* Subtle border for visual bounding box */
       border: 1px solid #e5e7eb; 
       background-color: #fff; /* Default background */
       transition: background-color 0.2s ease;
     }
+    
     .org-logo {
       max-width: 100%; max-height: 80px; object-fit: contain; display: block; margin: 0 auto;
+      /* CSS FIX: Add a drop-shadow. This makes white logos visible on white backgrounds immediately. */
+      filter: drop-shadow(0 1px 3px rgba(0,0,0,0.3));
     }
+    
     /* Applied when logo is detected as light/white */
     .org-logo-wrap.force-dark {
       background-color: #bf3426 !important; /* TBC Brand Red */
       border-color: #bf3426;
+    }
+    /* When force-dark is active, remove the drop-shadow so it looks cleaner */
+    .org-logo-wrap.force-dark .org-logo {
+      filter: none;
     }
 
     /* Legend Toggle */
@@ -281,12 +289,12 @@
 
     function chipsRow(props){ const typeVals = normalizeTags(props[FIELDS.type]); const countyValsRaw = normalizeTags(props[FIELDS.county]); const networkVals = normalizeTags(props[FIELDS.network]); const categoryVals = normalizeTags(props[FIELDS.category]); const denomVals = normalizeTags(props[FIELDS.denomination]); const makeChip = (groupKey, text, displayText) => { const bg = colorForTag(groupKey, text); const fg = contrastText(bg); return `<span class="chip chip-colored" style="background:${bg};color:${fg};">${displayText ?? text}</span>`; }; const chips = [ ...typeVals.map(t => makeChip('type', t)), ...countyValsRaw.map(t => makeChip('county', t, /county\b/i.test(t) ? t : `${t} County`)), ...networkVals.map(t => makeChip('network', t)), ...categoryVals.map(t => makeChip('category', t)), ...denomVals.map(t => makeChip('denomination', t)), ]; if (!chips.length) return ''; return `<div class="tag-strip">${chips.join('')}</div>`; }
 
-    // === The "Magic" Auto-Contrast Function ===
+    // === Updated Contrast Logic ===
+    // 1. More sensitive analysis (lower alpha threshold)
+    // 2. Calculates Average Luminance
     window.detectLogoContrast = function(img) {
       if (img.dataset.checked) return;
-      img.dataset.checked = true; // prevent re-running
-      
-      // If image failed to load, don't try to analyze
+      img.dataset.checked = true;
       if (!img.complete || img.naturalWidth === 0) return;
 
       try {
@@ -297,29 +305,29 @@
         ctx.drawImage(img, 0, 0);
         
         const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-        let r, g, b, a;
-        let lightPixels = 0;
-        let darkPixels = 0;
-        const total = data.length / 4;
-        const step = Math.ceil(total / 2500); // Sample ~2500 pixels for speed
+        let totalLum = 0;
+        let pixelCount = 0;
+        const step = Math.ceil(data.length / 4 / 2500); // sample ~2500 px
 
         for (let i = 0; i < data.length; i += (4 * step)) {
-          r = data[i]; g = data[i+1]; b = data[i+2]; a = data[i+3];
-          if (a < 128) continue; // Skip mostly transparent pixels
+          const a = data[i+3];
+          if (a < 50) continue; // Lower threshold to catch faint pixels
           
-          // Calculate luminance (0-255)
+          const r = data[i];
+          const g = data[i+1];
+          const b = data[i+2];
           const lum = 0.2126*r + 0.7152*g + 0.0722*b;
-          if (lum > 200) lightPixels++; // Very bright
-          else if (lum < 150) darkPixels++; // Dark-ish
+          
+          totalLum += lum;
+          pixelCount++;
         }
 
-        // If significant majority of pixels are light/white, trigger dark mode
-        if (lightPixels > darkPixels && lightPixels > 10) {
+        // If average pixel is very bright (>200), force dark background
+        if (pixelCount > 0 && (totalLum / pixelCount) > 200) {
           img.parentElement.classList.add('force-dark');
         }
       } catch (e) {
-        // Cross-origin issues can block canvas reading. 
-        // We suppress errors here to avoid console noise.
+        // console.warn("Canvas reading blocked", e);
       }
     };
 
@@ -329,7 +337,7 @@
       const address = props[FIELDS.address];
       const prayerRequest = props[FIELDS.prayer];
       const logoUrl = props[FIELDS.logo];
-      const logoBg = props[FIELDS.logo_bg]; // Manual override from Airtable
+      const logoBg = props[FIELDS.logo_bg];
 
       let prayerHtml = '';
       if (prayerRequest && String(prayerRequest).trim()) {
@@ -342,16 +350,14 @@
       let logoHtml = '';
       if (logoUrl) {
         // Priority: 
-        // 1. Manual background from Airtable (logoBg)
-        // 2. Client-side auto-detection via detectLogoContrast()
+        // 1. Manual background from Airtable
+        // 2. Client-side auto-detection
         if (logoBg) {
-          // Manual override present
           logoHtml = `<div class="org-logo-wrap" style="background-color:${logoBg}; border-color:${logoBg}">
             <img src="${logoUrl}" alt="${name} logo" class="org-logo" loading="lazy">
           </div>`;
         } else {
-          // Auto-detection mode
-          // crossorigin="anonymous" is required for canvas analysis of external R2 images
+          // Add drop-shadow via CSS class on image (handled in <style>)
           logoHtml = `<div class="org-logo-wrap">
             <img src="${logoUrl}" alt="${name} logo" class="org-logo" 
                  crossorigin="anonymous" loading="lazy" onload="detectLogoContrast(this)">
