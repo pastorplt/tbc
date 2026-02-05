@@ -104,10 +104,13 @@
 
     /* Org Logo in Popup */
     .org-logo-wrap {
-      text-align: center; margin-bottom: 12px; border-bottom: 1px solid #e9ecef; padding-bottom: 12px;
+      text-align: center; margin-bottom: 12px; 
+      padding: 12px; border-radius: 8px;
+      /* Default background is transparent, but border helps if white-on-white */
+      border: 1px solid #e5e7eb; 
     }
     .org-logo {
-      max-width: 140px; max-height: 80px; object-fit: contain; display: block; margin: 0 auto;
+      max-width: 100%; max-height: 80px; object-fit: contain; display: block; margin: 0 auto;
     }
 
     /* Show toggle on ALL viewports */
@@ -268,7 +271,8 @@
         county: pick("County","county"),
         network: pick("Network Name","Network","network_name"),
         prayer: pick("Latest Prayer Request", "prayer_request", "prayer"),
-        logo: pick("logo", "logo_url", "Org Logo")
+        logo: pick("logo", "logo_url", "Org Logo"),
+        logo_bg: pick("logo_background", "Logo Background") // Map new field
       };
     }
 
@@ -508,13 +512,14 @@
       return `<div class="tag-strip">${chips.join('')}</div>`;
     }
 
-    // UPDATED: Show Logo if present
+    // UPDATED: Show Logo if present and apply background color
     function infoHtml(props) {
       const name = props[FIELDS.name] || "(No name)";
       const website = props[FIELDS.website];
       const address = props[FIELDS.address];
       const prayerRequest = props[FIELDS.prayer];
       const logoUrl = props[FIELDS.logo];
+      const logoBg = props[FIELDS.logo_bg] || 'transparent'; // Use background if set
 
       let prayerHtml = '';
       if (prayerRequest && String(prayerRequest).trim()) {
@@ -526,7 +531,7 @@
 
       let logoHtml = '';
       if (logoUrl) {
-        logoHtml = `<div class="org-logo-wrap">
+        logoHtml = `<div class="org-logo-wrap" style="background-color: ${logoBg}">
           <img src="${logoUrl}" alt="${name} logo" class="org-logo" loading="lazy">
         </div>`;
       }
