@@ -16,7 +16,7 @@ export default {
     try {
       const objectKey = getGeoJsonKey(env);
 
-      // 1. Image Serving Route (New)
+      // 1. Image Serving Route
       // Matches /orgs/img/rec12345/0
       if (request.method === "GET" && pathname.startsWith("/orgs/img/")) {
         const { recordId, index } = parseAttachmentPath(pathname, "/orgs/img");
@@ -109,6 +109,7 @@ export default {
         const startCursor = payload.cursor != null ? payload.cursor : state.cursor;
 
         // Fetch chunk from Airtable
+        // UPDATED: Added "Logo Background" to this list
         const { records, nextCursor, pagesUsed } = await fetchAirtableChunk(env, tableName, [
           fieldLat, fieldLon,
           "Org Name",
@@ -120,7 +121,8 @@ export default {
           "County",
           "Network Name",
           "Latest Prayer Request",
-          "Org Logo" // Added field
+          "Org Logo",
+          "Logo Background" 
         ], { offset: startCursor || undefined, maxPages: MAX_PAGES });
 
         // Prewarm images for this chunk before saving
@@ -265,7 +267,6 @@ async function fetchAirtableChunk(env, tableName, fields = [], { offset, maxPage
 }
 
 async function fetchRecordById(env, recordId, tableName) {
-  // Need table name, usually passed in env or default
   const table = env.ORG_TABLE_NAME || "Master List";
   const url = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(table)}/${recordId}`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${env.AIRTABLE_TOKEN}` } });
@@ -275,27 +276,23 @@ async function fetchRecordById(env, recordId, tableName) {
 
 /* ---------------- Image Prewarming & Handling ---------------- */
 
-// Save image to R2: org-logos/<recordId>/<index>/w400-webp
+// Save image to R2
 async function prewarmChunkImages(env, records, fieldName) {
   const tasks = [];
   for (const r of records) {
     const attachments = r.fields[fieldName];
     if (Array.isArray(attachments) && attachments.length > 0) {
-      // Process only the first image (index 0) to save resources, or loop if you want multiple
       const att = attachments[0];
       tasks.push({ recordId: r.id, index: 0, att });
     }
   }
 
-  // Process in parallel with concurrency limit
+  // Process in parallel
   await withConcurrency(tasks, 4, async ({ recordId, index, att }) => {
     const srcUrl = pickAttachmentUrl(att);
     if (!srcUrl) return;
 
     const key = `org-logos/${recordId}/${index}/w400-webp`;
-    
-    // Check if already exists to avoid re-downloading? 
-    // Usually overkill for regen jobs, just overwrite to ensure freshness.
     
     const response = await fetch(srcUrl, {
       cf: {
@@ -335,13 +332,12 @@ function pickAttachmentUrl(att) {
 }
 
 function parseAttachmentPath(pathname, prefix) {
-  // prefix might be /orgs/img
-  const relative = pathname.replace(prefix, ""); // /recXYZ/0
+  const relative = pathname.replace(prefix, ""); 
   const parts = relative.split("/").filter(Boolean);
   return { recordId: parts[0], index: Number(parts[1] || 0) };
 }
 
-// Redirect fallback if image not in R2
+// Redirect fallback
 const urlCache = new Map();
 async function handleAttachmentRedirect(env, recordId, index, fieldName) {
   const idx = Number(index);
@@ -362,7 +358,7 @@ async function handleAttachmentRedirect(env, recordId, index, fieldName) {
     const url = pickAttachmentUrl(attachments[idx]);
     if (!url) return textResponse("Invalid URL", 404);
 
-    urlCache.set(cacheKey, { url, expires: Date.now() + 600000 }); // 10 min cache
+    urlCache.set(cacheKey, { url, expires: Date.now() + 600000 }); 
     return Response.redirect(url, 302);
   } catch (e) {
     return textResponse("Error fetching record", 500);
@@ -389,12 +385,12 @@ function recordsToFeatures(records, { fieldLat, fieldLon, origin }) {
       full_address:      normalizeValue(f["Address"]),
       county:            normalizeValue(f["County"]),
       network_name:      normalizeValue(f["Network Name"]),
-      prayer_request:    normalizeValue(f["Latest Prayer Request"])
+      prayer_request:    normalizeValue(f["Latest Prayer Request"]),
+      logo_background:   normalizeValue(f["Logo Background"]) // NEW: Map the background color
     };
 
     // Add Logo URL if attachment exists
     if (Array.isArray(f["Org Logo"]) && f["Org Logo"].length > 0) {
-      // Use the worker route that serves from R2
       props.logo = `${origin}/orgs/img/${r.id}/0`;
     }
 
