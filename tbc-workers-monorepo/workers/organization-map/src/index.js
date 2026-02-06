@@ -328,7 +328,10 @@ async function withConcurrency(items, limit, fn) {
 function pickAttachmentUrl(att) {
   if (!att) return null;
   if (typeof att === 'string') return /^https?:\/\//i.test(att) ? att : null;
-  return att?.thumbnails?.large?.url || att?.thumbnails?.full?.url || att?.url || null;
+  
+  // CHANGED: Try original 'url' first.
+  // This bypasses Airtable's low-quality WebP thumbnails and lets Cloudflare resize the high-quality original.
+  return att.url || att?.thumbnails?.large?.url || att?.thumbnails?.full?.url || null;
 }
 
 function parseAttachmentPath(pathname, prefix) {
