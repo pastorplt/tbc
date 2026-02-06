@@ -17,7 +17,6 @@ export default {
       const objectKey = getGeoJsonKey(env);
 
       // 1. Image Serving Route
-      // Matches /orgs/img/rec12345/0
       if (request.method === "GET" && pathname.startsWith("/orgs/img/")) {
         const { recordId, index } = parseAttachmentPath(pathname, "/orgs/img");
         if (!recordId) return withCORS(json({ error: "Invalid image path" }, 400));
@@ -35,7 +34,7 @@ export default {
             }));
           }
         }
-        // Fallback to Airtable redirect if R2 misses
+        // Fallback to Airtable redirect
         return withCORS(await handleAttachmentRedirect(env, recordId, index, "Org Logo"));
       }
 
@@ -109,7 +108,6 @@ export default {
         const startCursor = payload.cursor != null ? payload.cursor : state.cursor;
 
         // Fetch chunk from Airtable
-        // UPDATED: Added "Logo Background" to this list
         const { records, nextCursor, pagesUsed } = await fetchAirtableChunk(env, tableName, [
           fieldLat, fieldLon,
           "Org Name",
@@ -122,10 +120,10 @@ export default {
           "Network Name",
           "Latest Prayer Request",
           "Org Logo",
-          "Logo Background" 
+          "Logo Background"
         ], { offset: startCursor || undefined, maxPages: MAX_PAGES });
 
-        // Prewarm images for this chunk before saving
+        // Prewarm images for this chunk
         if (records.length > 0 && env.ORG_IMAGES_BUCKET) {
           await prewarmChunkImages(env, records, "Org Logo");
         }
@@ -163,7 +161,7 @@ export default {
           }));
         }
 
-        // Finalize: Merge all chunks
+        // Finalize
         const allFeatures = [];
         if (state.chunkKeys.length) {
           for (const key of state.chunkKeys) {
@@ -276,7 +274,6 @@ async function fetchRecordById(env, recordId, tableName) {
 
 /* ---------------- Image Prewarming & Handling ---------------- */
 
-// Save image to R2
 async function prewarmChunkImages(env, records, fieldName) {
   const tasks = [];
   for (const r of records) {
@@ -287,7 +284,6 @@ async function prewarmChunkImages(env, records, fieldName) {
     }
   }
 
-  // Process in parallel
   await withConcurrency(tasks, 4, async ({ recordId, index, att }) => {
     const srcUrl = pickAttachmentUrl(att);
     if (!srcUrl) return;
@@ -329,8 +325,7 @@ function pickAttachmentUrl(att) {
   if (!att) return null;
   if (typeof att === 'string') return /^https?:\/\//i.test(att) ? att : null;
   
-  // CHANGED: Try original 'url' first.
-  // This bypasses Airtable's low-quality WebP thumbnails and lets Cloudflare resize the high-quality original.
+  // Prefer original URL to avoid bad thumbnail quality from Airtable
   return att.url || att?.thumbnails?.large?.url || att?.thumbnails?.full?.url || null;
 }
 
@@ -340,7 +335,6 @@ function parseAttachmentPath(pathname, prefix) {
   return { recordId: parts[0], index: Number(parts[1] || 0) };
 }
 
-// Redirect fallback
 const urlCache = new Map();
 async function handleAttachmentRedirect(env, recordId, index, fieldName) {
   const idx = Number(index);
@@ -383,16 +377,16 @@ function recordsToFeatures(records, { fieldLat, fieldLon, origin }) {
       organization_name: normalizeValue(f["Org Name"]),
       website:           normalizeValue(f["Website"]),
       category:          normalizeValue(f["Category"]),
-      denomination:      normalizeValue(f["Denomination"]),
+      // CHANGED: Use cleanDenomination instead of normalizeValue
+      denomination:      cleanDenomination(f["Denomination"]),
       organization_type: normalizeValue(f["Org Type"]),
       full_address:      normalizeValue(f["Address"]),
       county:            normalizeValue(f["County"]),
       network_name:      normalizeValue(f["Network Name"]),
       prayer_request:    normalizeValue(f["Latest Prayer Request"]),
-      logo_background:   normalizeValue(f["Logo Background"]) // NEW: Map the background color
+      logo_background:   normalizeValue(f["Logo Background"])
     };
 
-    // Add Logo URL if attachment exists
     if (Array.isArray(f["Org Logo"]) && f["Org Logo"].length > 0) {
       props.logo = `${origin}/orgs/img/${r.id}/0`;
     }
@@ -407,6 +401,13 @@ function recordsToFeatures(records, { fieldLat, fieldLon, origin }) {
 }
 
 /* ---------------- Utils ---------------- */
+
+// NEW: Helper to strip parenthetical text from denomination
+function cleanDenomination(v) {
+  const s = normalizeValue(v);
+  // Removes " (Any Text)" including the parentheses
+  return s.replace(/\s*\([^)]*\)/g, "").trim();
+}
 
 function toNum(v) { if (v == null) return NaN; return Number(typeof v === "string" ? v.trim() : v); }
 
