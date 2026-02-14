@@ -302,6 +302,18 @@ export default {
         });
       }
 
+      // DEBUG ENDPOINT - Shows what env vars the worker sees
+if (url.pathname === "/api/debug-env" && request.method === "GET") {
+  return jsonResponse({
+    hasApiKey: !!env.AIRTABLE_API_KEY,
+    hasToken: !!env.AIRTABLE_TOKEN,
+    apiKeyPrefix: env.AIRTABLE_API_KEY ? env.AIRTABLE_API_KEY.substring(0, 10) : "missing",
+    baseId: env.AIRTABLE_BASE_ID,
+    leadersTable: env.LEADERS_TABLE_NAME,
+    usersTable: env.USERS_TABLE_NAME
+  });
+}
+
       // ========================================================================
       // 📖 2. DATA ROUTES (Used by Auth & Main App)
       // ========================================================================
