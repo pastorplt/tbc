@@ -264,43 +264,111 @@ export default {
         return jsonResponse({ status: "created_pending", message: "Registration submitted." });
       }
 
-      // Step 3: Verify OTP
-      if (url.pathname === "/api/auth/verify-otp" && request.method === "POST") {
-        const { phone, code } = await request.json();
-        const normalizedPhone = normalizePhone(phone);
-        let isValid = false;
+// Step 3: Verify OTP
+if (url.pathname === "/api/auth/verify-otp" && request.method === "POST") {
+  const { phone, code } = await request.json();
+  const normalizedPhone = normalizePhone(phone);
+  let isValid = false;
 
-        // Check KV
-        if (env.AUTH_STORE) {
-          const storedOtp = await env.AUTH_STORE.get(`otp:${normalizedPhone}`);
-          if (storedOtp && storedOtp === code) {
-            isValid = true;
-            await env.AUTH_STORE.delete(`otp:${normalizedPhone}`);
-          }
+  // Check KV
+  if (env.AUTH_STORE) {
+    const storedOtp = await env.AUTH_STORE.get(`otp:${normalizedPhone}`);
+    if (storedOtp && storedOtp === code) {
+      isValid = true;
+      await env.AUTH_STORE.delete(`otp:${normalizedPhone}`);
+    }
+  }
+
+  // Backdoor for testing/admins (remove in prod if desired)
+  if (!isValid && code === "123456") {
+    const user = await findRecordByPhone(env.USERS_TABLE_NAME, normalizedPhone);
+    if (user) {
+      isValid = true;
+    }
+  }
+
+  if (!isValid) return jsonResponse({ error: "Invalid code" }, 401);
+
+  // Success -> Return User Token/Info with full profile
+  const userRec = await findRecordByPhone(env.USERS_TABLE_NAME, normalizedPhone);
+  const token = `session_${userRec.id}_${Date.now()}`; 
+
+  // Build user profile
+  const userProfile = {
+    id: userRec.id,
+    phone: normalizedPhone,
+    leaderId: userRec.fields["Linked Leader"]?.[0],
+    networkId: userRec.fields["Linked Network"]?.[0],
+    organizationId: userRec.fields["Linked Organization"]?.[0]
+  };
+
+  // Fetch leader details if linked
+  if (userProfile.leaderId) {
+    try {
+      const leaderEndpoint = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(env.LEADERS_TABLE_NAME)}/${userProfile.leaderId}`;
+      const leaderRes = await fetch(leaderEndpoint, {
+        headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` }
+      });
+      const leaderData = await leaderRes.json();
+      
+      if (leaderRes.ok && leaderData.fields) {
+        userProfile.name = leaderData.fields["Leader Name"];
+        userProfile.email = leaderData.fields["Email"];
+        
+        // Get network name if linked
+        if (leaderData.fields["Network Membership"]?.[0]) {
+          userProfile.networkId = leaderData.fields["Network Membership"][0];
         }
-
-        // Backdoor for testing/admins (remove in prod if desired)
-        if (!isValid && code === "123456") {
-          const user = await findRecordByPhone(env.USERS_TABLE_NAME, normalizedPhone);
-          if (user) {
-            isValid = true;
-          }
+        
+        // Get church/org name if linked
+        if (leaderData.fields["Leads Church"]?.[0]) {
+          userProfile.organizationId = leaderData.fields["Leads Church"][0];
         }
-
-        if (!isValid) return jsonResponse({ error: "Invalid code" }, 401);
-
-        // Success -> Return User Token/Info
-        const userRec = await findRecordByPhone(env.USERS_TABLE_NAME, normalizedPhone);
-        const token = `session_${userRec.id}_${Date.now()}`; 
-
-        return jsonResponse({ 
-          token, 
-          user: { 
-            id: userRec.id, 
-            leaderId: userRec.fields["Linked Leader"]?.[0] 
-          } 
-        });
       }
+    } catch (err) {
+      console.log("Error fetching leader details:", err);
+    }
+  }
+
+  // Fetch network name if we have networkId
+  if (userProfile.networkId) {
+    try {
+      const networkEndpoint = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(env.NETWORKS_TABLE_NAME)}/${userProfile.networkId}`;
+      const networkRes = await fetch(networkEndpoint, {
+        headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` }
+      });
+      const networkData = await networkRes.json();
+      
+      if (networkRes.ok && networkData.fields) {
+        userProfile.network = networkData.fields["Network Name"];
+      }
+    } catch (err) {
+      console.log("Error fetching network details:", err);
+    }
+  }
+
+  // Fetch organization name if we have organizationId
+  if (userProfile.organizationId) {
+    try {
+      const orgEndpoint = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(env.ORGANIZATIONS_TABLE_NAME)}/${userProfile.organizationId}`;
+      const orgRes = await fetch(orgEndpoint, {
+        headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` }
+      });
+      const orgData = await orgRes.json();
+      
+      if (orgRes.ok && orgData.fields) {
+        userProfile.church = orgData.fields["Org Name"];
+      }
+    } catch (err) {
+      console.log("Error fetching organization details:", err);
+    }
+  }
+
+  return jsonResponse({ 
+    token, 
+    user: userProfile
+  });
+}
 
 
       // ========================================================================
