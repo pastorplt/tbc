@@ -154,6 +154,7 @@ export default {
         console.warn("KV 'AUTH_STORE' not bound!");
       }
 
+      /* commenting out until Twilio registration is approved!
       // Fire and forget Twilio
       if (env.TWILIO_ACCOUNT_SID) {
         const endpoint = `https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_ACCOUNT_SID}/Messages.json`;
@@ -172,6 +173,7 @@ export default {
           body: formData
         }).catch(e => console.log("Twilio Error:", e)); 
       }
+      */
     }
 
     // Legacy Find/Create for old routes
