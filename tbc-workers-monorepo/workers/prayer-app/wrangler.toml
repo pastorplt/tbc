@@ -13,3 +13,27 @@ PRAYER_LOGS_TABLE = "Prayer Logs"
 NETWORKS_TABLE_NAME = "Networks"
 ORGANIZATIONS_TABLE_NAME = "Organizations"
 IN_PRAYER_REQUESTS_TABLE_NAME = "IN: Prayer Requests"
+
+
+name = "prayer-app"
+main = "src/index.js"
+compatibility_date = "2025-08-01"
+workers_dev = true
+keep_vars = true
+
+# KV Namespace Binding for OTP storage
+[[kv_namespaces]]
+binding = "AUTH_STORE"
+id = "f156c681db2348a4bf44cd1d801f28ac"
+
+[vars]
+AIRTABLE_BASE_ID = "app1TcNtvts4fkqdm"
+
+# Table Configuration
+LEADERS_TABLE_NAME = "Leaders"
+USERS_TABLE_NAME = "App Users"
+PRAYER_REQUESTS_TABLE = "Personal Prayer Requests"
+PRAYER_LOGS_TABLE = "Prayer Logs"
+NETWORKS_TABLE_NAME = "Networks"
+ORGANIZATIONS_TABLE_NAME = "Organizations"
+IN_PRAYER_REQUESTS_TABLE_NAME = "IN: Prayer Requests"
