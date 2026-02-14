@@ -177,7 +177,7 @@ export default {
       // ========================================================================
 
       // Step 1: Traffic Light Check
-      if (url.pathname === "/auth/start" && request.method === "POST") {
+      if (url.pathname === "/api/auth/start" && request.method === "POST") {
         const { phone } = await request.json();
         const cleanPhone = normalizePhone(phone);
 
@@ -224,7 +224,7 @@ export default {
       }
 
       // Step 2: Register New User
-      if (url.pathname === "/auth/register" && request.method === "POST") {
+      if (url.pathname === "/api/auth/register" && request.method === "POST") {
         const { name, phone, networkId, orgId, reason } = await request.json();
         const normalizedPhone = normalizePhone(phone);
 
@@ -254,7 +254,7 @@ export default {
       }
 
       // Step 3: Verify OTP
-      if (url.pathname === "/auth/verify-otp" && request.method === "POST") {
+      if (url.pathname === "/api/auth/verify-otp" && request.method === "POST") {
         const { phone, code } = await request.json();
         const normalizedPhone = normalizePhone(phone);
         let isValid = false;
