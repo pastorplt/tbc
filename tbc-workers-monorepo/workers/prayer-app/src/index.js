@@ -35,11 +35,10 @@ export default {
     return null;
   }
 
-  // Fetch all records from the table with Phone field
+    // Fetch all records from the table - DON'T limit fields, we need everything
   let allRecords = [];
   let offset = "";
-  // ⚠️ CRITICAL: Must specify fields to fetch
-  const baseUrl = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}?fields%5B%5D=Phone`;
+  const baseUrl = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}`;
 
   do {
     let fetchUrl = baseUrl;
