@@ -283,7 +283,7 @@ export default {
         // Backdoor for testing/admins (remove in prod if desired)
         if (!isValid && code === "123456") {
           const user = await findRecordByPhone(env.USERS_TABLE_NAME, normalizedPhone);
-          if (user && user.fields["App Approved"] === true) {
+          if (user) {
             isValid = true;
           }
         }
