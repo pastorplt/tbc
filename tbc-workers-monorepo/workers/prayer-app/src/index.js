@@ -26,47 +26,59 @@ export default {
       return digits.slice(-10);
     }
 
-    // Find record by phone number with normalization
     async function findRecordByPhone(tableName, phoneValue) {
-      const normalizedInput = normalizePhone(phoneValue);
-      if (!normalizedInput || normalizedInput.length !== 10) {
-        return null;
-      }
+  const normalizedInput = normalizePhone(phoneValue);
+  console.log(`[findRecordByPhone] Searching ${tableName} for normalized phone: ${normalizedInput}`);
+  
+  if (!normalizedInput || normalizedInput.length !== 10) {
+    console.log(`[findRecordByPhone] Invalid normalized phone length: ${normalizedInput.length}`);
+    return null;
+  }
 
-      // Fetch all records from the table
-      let allRecords = [];
-      let offset = "";
-      const baseUrl = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}`;
+  // Fetch all records from the table with Phone field
+  let allRecords = [];
+  let offset = "";
+  // ⚠️ CRITICAL: Must specify fields to fetch
+  const baseUrl = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}?fields%5B%5D=Phone`;
 
-      do {
-        let fetchUrl = baseUrl;
-        if (offset) fetchUrl += `?offset=${offset}`;
+  do {
+    let fetchUrl = baseUrl;
+    if (offset) fetchUrl += `&offset=${offset}`;
 
-        const res = await fetch(fetchUrl, { 
-          headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` } 
-        });
-        const data = await res.json();
-        
-        if (!res.ok || data.error) {
-          throw new Error(`Airtable Error (${tableName}): ${data.error?.message || res.statusText}`);
-        }
-        
-        if (data.records) {
-          allRecords = allRecords.concat(data.records);
-        }
-        offset = data.offset;
-      } while (offset);
-
-      // Find matching record by normalized phone
-      for (const record of allRecords) {
-        const recordPhone = record.fields.Phone || record.fields.phone;
-        if (recordPhone && normalizePhone(recordPhone) === normalizedInput) {
-          return record;
-        }
-      }
-
-      return null;
+    const res = await fetch(fetchUrl, { 
+      headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` } 
+    });
+    const data = await res.json();
+    
+    if (!res.ok || data.error) {
+      console.log(`[findRecordByPhone] Airtable error:`, data.error);
+      throw new Error(`Airtable Error (${tableName}): ${data.error?.message || res.statusText}`);
     }
+    
+    if (data.records) {
+      allRecords = allRecords.concat(data.records);
+    }
+    offset = data.offset;
+  } while (offset);
+
+  console.log(`[findRecordByPhone] Fetched ${allRecords.length} total records`);
+
+  // Find matching record by normalized phone
+  for (const record of allRecords) {
+    const recordPhone = record.fields.Phone || record.fields.phone;
+    const normalizedRecord = normalizePhone(recordPhone);
+    
+    console.log(`[findRecordByPhone] Record ${record.id}: Phone="${recordPhone}" -> normalized="${normalizedRecord}"`);
+    
+    if (recordPhone && normalizedRecord === normalizedInput) {
+      console.log(`[findRecordByPhone] ✅ MATCH FOUND!`);
+      return record;
+    }
+  }
+
+  console.log(`[findRecordByPhone] ❌ No match found`);
+  return null;
+}
 
     // Generic Airtable Create
     async function createRecord(tableName, fields) {
