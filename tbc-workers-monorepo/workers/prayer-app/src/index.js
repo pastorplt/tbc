@@ -17,6 +17,57 @@ export default {
 
     // --- Helpers (Merged) ---
 
+    // Phone Normalization - Extract last 10 digits only
+    function normalizePhone(phone) {
+      if (!phone) return "";
+      // Remove all non-digit characters
+      const digits = phone.replace(/\D/g, "");
+      // Take last 10 digits (handles +1 country code)
+      return digits.slice(-10);
+    }
+
+    // Find record by phone number with normalization
+    async function findRecordByPhone(tableName, phoneValue) {
+      const normalizedInput = normalizePhone(phoneValue);
+      if (!normalizedInput || normalizedInput.length !== 10) {
+        return null;
+      }
+
+      // Fetch all records from the table
+      let allRecords = [];
+      let offset = "";
+      const baseUrl = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}`;
+
+      do {
+        let fetchUrl = baseUrl;
+        if (offset) fetchUrl += `?offset=${offset}`;
+
+        const res = await fetch(fetchUrl, { 
+          headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` } 
+        });
+        const data = await res.json();
+        
+        if (!res.ok || data.error) {
+          throw new Error(`Airtable Error (${tableName}): ${data.error?.message || res.statusText}`);
+        }
+        
+        if (data.records) {
+          allRecords = allRecords.concat(data.records);
+        }
+        offset = data.offset;
+      } while (offset);
+
+      // Find matching record by normalized phone
+      for (const record of allRecords) {
+        const recordPhone = record.fields.Phone || record.fields.phone;
+        if (recordPhone && normalizePhone(recordPhone) === normalizedInput) {
+          return record;
+        }
+      }
+
+      return null;
+    }
+
     // Generic Airtable Create
     async function createRecord(tableName, fields) {
       const endpoint = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}`;
@@ -83,9 +134,11 @@ export default {
     // Send OTP (Twilio)
     async function sendOtp(phone) {
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const normalizedPhone = normalizePhone(phone);
+      
       // Store in KV (Expires in 10 mins)
       if (env.AUTH_STORE) {
-        await env.AUTH_STORE.put(`otp:${phone}`, otp, { expirationTtl: 600 });
+        await env.AUTH_STORE.put(`otp:${normalizedPhone}`, otp, { expirationTtl: 600 });
       } else {
         console.warn("KV 'AUTH_STORE' not bound!");
       }
@@ -94,7 +147,8 @@ export default {
       if (env.TWILIO_ACCOUNT_SID) {
         const endpoint = `https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_ACCOUNT_SID}/Messages.json`;
         const formData = new URLSearchParams();
-        formData.append("To", phone);
+        // Twilio needs +1 format for US numbers
+        formData.append("To", `+1${normalizedPhone}`);
         formData.append("From", env.TWILIO_PHONE_NUMBER);
         formData.append("Body", `TBC Login Code: ${otp}`);
         
@@ -125,12 +179,20 @@ export default {
       // Step 1: Traffic Light Check
       if (url.pathname === "/auth/start" && request.method === "POST") {
         const { phone } = await request.json();
-        const cleanPhone = phone.trim();
+        const cleanPhone = normalizePhone(phone);
+
+        console.log(`[Auth] Normalized phone: ${cleanPhone}`);
+
+        // Validate phone number
+        if (!cleanPhone || cleanPhone.length !== 10) {
+          return jsonResponse({ error: "Invalid phone number format" }, 400);
+        }
 
         // Check A: Already an App User?
-        let appUser = await findAirtableRecord(env.USERS_TABLE_NAME, "Phone", cleanPhone);
+        let appUser = await findRecordByPhone(env.USERS_TABLE_NAME, cleanPhone);
 
         if (appUser) {
+          console.log(`[Auth] Found app user: ${appUser.id}`);
           if (appUser.fields["App Approved"] === true) {
             await sendOtp(cleanPhone);
             return jsonResponse({ status: "otp_sent", message: "Code sent." });
@@ -140,9 +202,10 @@ export default {
         }
 
         // Check B: Is it a Leader in Directory?
-        const leader = await findAirtableRecord(env.LEADERS_TABLE_NAME, "Phone", cleanPhone);
+        const leader = await findRecordByPhone(env.LEADERS_TABLE_NAME, cleanPhone);
 
         if (leader) {
+          console.log(`[Auth] Found leader: ${leader.id}`);
           // Auto-promote to App User
           await createRecord(env.USERS_TABLE_NAME, {
             "Phone": cleanPhone,
@@ -156,17 +219,19 @@ export default {
         }
 
         // Check C: Stranger -> Registration
+        console.log(`[Auth] No user or leader found, needs registration`);
         return jsonResponse({ status: "needs_registration" });
       }
 
       // Step 2: Register New User
       if (url.pathname === "/auth/register" && request.method === "POST") {
         const { name, phone, networkId, orgId, reason } = await request.json();
+        const normalizedPhone = normalizePhone(phone);
 
         // Create PENDING Leader
         const leaderFields = {
           "Leader Name": name,
-          "Phone": phone,
+          "Phone": normalizedPhone,
           "App User Status": "Pending",
         };
         if (networkId) leaderFields["Network Membership"] = [networkId];
@@ -176,7 +241,7 @@ export default {
 
         // Create Unapproved App User
         await createRecord(env.USERS_TABLE_NAME, {
-          "Phone": phone,
+          "Phone": normalizedPhone,
           "App Approved": false,
           "Linked Leader": [newLeader.id],
           "Linked Network": networkId ? [networkId] : [],
@@ -191,20 +256,21 @@ export default {
       // Step 3: Verify OTP
       if (url.pathname === "/auth/verify-otp" && request.method === "POST") {
         const { phone, code } = await request.json();
+        const normalizedPhone = normalizePhone(phone);
         let isValid = false;
 
         // Check KV
         if (env.AUTH_STORE) {
-          const storedOtp = await env.AUTH_STORE.get(`otp:${phone}`);
+          const storedOtp = await env.AUTH_STORE.get(`otp:${normalizedPhone}`);
           if (storedOtp && storedOtp === code) {
             isValid = true;
-            await env.AUTH_STORE.delete(`otp:${phone}`);
+            await env.AUTH_STORE.delete(`otp:${normalizedPhone}`);
           }
         }
 
         // Backdoor for testing/admins (remove in prod if desired)
         if (!isValid && code === "123456") {
-          const user = await findAirtableRecord(env.USERS_TABLE_NAME, "Phone", phone);
+          const user = await findRecordByPhone(env.USERS_TABLE_NAME, normalizedPhone);
           if (user && user.fields["App Approved"] === true) {
             isValid = true;
           }
@@ -213,7 +279,7 @@ export default {
         if (!isValid) return jsonResponse({ error: "Invalid code" }, 401);
 
         // Success -> Return User Token/Info
-        const userRec = await findAirtableRecord(env.USERS_TABLE_NAME, "Phone", phone);
+        const userRec = await findRecordByPhone(env.USERS_TABLE_NAME, normalizedPhone);
         const token = `session_${userRec.id}_${Date.now()}`; 
 
         return jsonResponse({ 
@@ -270,7 +336,7 @@ export default {
           ? (await createRecord(env.LEADERS_TABLE_NAME, {
               "Leader Name": leader.name,
               "Email": leader.email,
-              "Phone": leader.phone,
+              "Phone": leader.phone ? normalizePhone(leader.phone) : "",
               "Leads Church": [finalChurchId] 
             })).id
           : leader.id;
