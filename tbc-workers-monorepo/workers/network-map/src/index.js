@@ -43,8 +43,6 @@ export default {
         const records = await fetchAllRecords(env);
         
         // --- OPTIMIZATION: Background Image Processing ---
-        // We move this to the background using ctx.waitUntil so the HTTP response
-        // returns immediately and the worker doesn't time out while processing images.
         if (env.NETWORK_IMAGES_BUCKET) {
             ctx.waitUntil(prewarmAll(env, records));
         }
@@ -63,22 +61,21 @@ export default {
           const latestPrayerRequest = normalizeTextField(f['Latest Prayer Request']);
           const canonicalPrayerRequest = allPrayerRequests || latestPrayerRequest;
 
+          // UPDATE: Generate links with .webp extension for better device caching
           let photoUrls = [];
           const photoField = f['Photo'];
-          // Check if field has actual attachment objects
           if (Array.isArray(photoField) && typeof photoField[0] === 'object' && (photoField[0]?.url || photoField[0]?.thumbnails)) {
-            // Use local proxy URL
-            photoUrls = photoField.slice(0, 6).map((_, idx) => `${origin}/img/${r.id}/${idx}`);
+            // Use local proxy URL with .webp
+            photoUrls = photoField.slice(0, 6).map((_, idx) => `${origin}/img/${r.id}/${idx}.webp`);
           } else {
-            // It's a string/text field
             photoUrls = [...new Set(collectPhotoUrls(photoField).map(normalizeUrl))].slice(0, 6);
           }
 
           let imageUrls = [];
           const imageField = f['Image'];
           if (Array.isArray(imageField) && typeof imageField[0] === 'object' && (imageField[0]?.url || imageField[0]?.thumbnails)) {
-            // Use local proxy URL
-            imageUrls = imageField.slice(0, 6).map((_, idx) => `${origin}/image/${r.id}/${idx}`);
+            // Use local proxy URL with .webp
+            imageUrls = imageField.slice(0, 6).map((_, idx) => `${origin}/image/${r.id}/${idx}.webp`);
           } else {
             imageUrls = [...new Set(collectPhotoUrls(imageField).map(normalizeUrl))].slice(0, 6);
           }
@@ -261,17 +258,14 @@ async function prewarmAttachments(env, recordId, fieldArray, maxCount = 6) {
   });
 }
 
-// --- OPTIMIZED PREWARM FUNCTION ---
-// Replaces previous loop-based approach to improve speed
+// Optimized Background Processor
 async function prewarmAll(env, records) {
-  // Process records in parallel batches of 10
-  // This helps complete the job before the worker CPU time limit is reached.
+  // Process 10 records at a time for speed
   await withConcurrency(records, 10, async (r) => {
     const f = r.fields || {};
     const photoField = f['Photo'];
     const imageField = f['Image'];
 
-    // Check if fields are actually attachments (array of objects)
     const isPhotoArr = Array.isArray(photoField) && typeof photoField[0] === 'object' && (photoField[0]?.url || photoField[0]?.thumbnails);
     const isImageArr = Array.isArray(imageField) && typeof imageField[0] === 'object' && (imageField[0]?.url || imageField[0]?.thumbnails);
 
@@ -311,10 +305,20 @@ async function handleAttachmentRedirect(env, recordId, index, fieldName) {
   return redirect(freshUrl, 302, { 'Cache-Control': 'public, max-age=300' });
 }
 
+// UPDATE: Robust parser for .webp handling
 function parseAttachmentPath(pathname, prefix) {
+  // pathname: /img/rec123/0.webp
+  // prefix: img
   const parts = pathname.split('/');
+  // parts[0] = ""
+  // parts[1] = "img"
+  // parts[2] = recordId
+  // parts[3] = index (e.g. "0" or "0.webp")
+  
   const recordId = parts[2];
-  const index = Number(parts[3]);
+  // parseInt safely parses "0" from "0.webp"
+  const index = parseInt(parts[3], 10);
+  
   return { recordId, index };
 }
 
