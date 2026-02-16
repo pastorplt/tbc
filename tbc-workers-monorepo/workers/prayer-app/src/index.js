@@ -210,6 +210,7 @@ export default {
         if (leader) {
           // Auto-migrate Leader to App User
           await createRecord(env.USERS_TABLE_NAME, {
+            "Name": leader.fields["Leader Name"],
             "Phone": cleanPhone,
             "App Approved": true,
             "Linked Leader": [leader.id],
