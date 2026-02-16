@@ -15,8 +15,10 @@ AIRTABLE_BASE_ID = "app1TcNtvts4fkqdm"
 # Table Configuration
 LEADERS_TABLE_NAME = "Leaders"
 USERS_TABLE_NAME = "App Users"
-PRAYER_REQUESTS_TABLE = "Personal Prayer Requests"
-PRAYER_LOGS_TABLE = "Prayer Logs"
+PRAYER_LOGS_TABLE = "Prayer Logs" # Legacy logs, keep if needed for history
 NETWORKS_TABLE_NAME = "Networks"
 ORGANIZATIONS_TABLE_NAME = "Organizations"
-IN_PRAYER_REQUESTS_TABLE_NAME = "IN: Prayer Requests"
+
+# NEW / RENAMED TABLES
+PRAYER_REQUESTS_TABLE_NAME = "Prayer Requests"
+PRAYER_ACTIVITY_TABLE_NAME = "Prayer Activity"
