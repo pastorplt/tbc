@@ -429,6 +429,75 @@ export default {
           }))
         });
       }
+
+      // 3.5 LOG ENTITY PRAYER (The "Standing Request" Pattern)
+      // POST /prayers/log-entity
+      // Body: { networkId, organizationId, leaderId }
+      if (url.pathname === "/prayers/log-entity" && request.method === "POST") {
+        const userId = getUserIdFromHeader(request);
+        if (!userId) return jsonResponse({ error: "Unauthorized" }, 401);
+
+        const body = await request.json();
+        const { networkId, organizationId, leaderId } = body;
+
+        if (!networkId && !organizationId && !leaderId) {
+             return jsonResponse({ error: "Target ID required" }, 400);
+        }
+
+        // 1. Determine Target Table & Field
+        let targetTable, targetField, targetId, nameField;
+        if (networkId) { 
+            targetTable = env.NETWORKS_TABLE_NAME; targetField = "Network"; targetId = networkId; nameField = "Network Name";
+        } else if (organizationId) { 
+            targetTable = env.ORGANIZATIONS_TABLE_NAME; targetField = "Organization"; targetId = organizationId; nameField = "Org Name";
+        } else { 
+            targetTable = env.LEADERS_TABLE_NAME; targetField = "Leader"; targetId = leaderId; nameField = "Leader Name";
+        }
+
+        const REQUESTS_TABLE = env.PRAYER_REQUESTS_TABLE_NAME || "Prayer Requests";
+
+        // 2. Find Existing "Standing" Request
+        // Formula: AND({LinkedField}='ID', {Type}='Standing')
+        const existing = await fetchRecords(REQUESTS_TABLE, {
+            formula: `AND({${targetField}}='${targetId}', {Type}='Standing')`,
+            maxRecords: 1
+        });
+
+        let requestId;
+
+        if (existing.length > 0) {
+            requestId = existing[0].id;
+        } else {
+            // 3. Fetch Entity Name (for the request text)
+            const entity = await findAirtableRecord(targetTable, "RECORD_ID()", targetId); // Helper needed or just fetch
+            // Alternatively, just fetch the specific record directly:
+            const entRes = await fetch(`https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${targetTable}/${targetId}`, {
+                 headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` }
+            });
+            const entData = await entRes.json();
+            const entityName = entData.fields?.[nameField] || "Unspecified";
+
+            // 4. Create Standing Request
+            const newReq = await createRecord(REQUESTS_TABLE, {
+                [targetField]: [targetId],
+                "Request": `Prayer for ${entityName}`,
+                "Type": "Standing",
+                "Status": "Active",
+                "Visibility": "Public"
+            });
+            requestId = newReq.id;
+        }
+
+        // 5. Log Activity
+        await createRecord(env.PRAYER_ACTIVITY_TABLE_NAME, {
+            "App User": [userId],
+            "Request": [requestId],
+            "Action Type": "Prayed",
+            "Status": "Active"
+        });
+
+        return jsonResponse({ success: true, requestId });
+      }
       
       // 4. LEGACY / HYBRID SUBMISSION ROUTES
 
