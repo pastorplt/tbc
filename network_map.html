@@ -4,7 +4,6 @@
   <meta charset="utf-8" />
   <title>TBC Networks Map</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <!-- Favicon -->
   <link rel="icon" href="/assets/favicon.ico" type="image/x-icon" />
   <link rel="shortcut icon" href="/assets/favicon.ico" type="image/x-icon" />
 
@@ -145,7 +144,15 @@
     .tip .label { color:#666; }
     .tip-name { font-size: 15px; font-weight: 600; margin-bottom: 2px; color: #111; }
     .tip > div { overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; }
-    .prayer-request { max-width: 100%; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; }
+    
+    /* NEW: Button Styles for Popup */
+    .btn-pray {
+      display: inline-block; width: 100%; text-align: center;
+      background: #bf3426; color: white; text-decoration: none;
+      padding: 10px; border-radius: 8px; margin-top: 10px; font-weight: 700;
+      box-sizing: border-box;
+    }
+    .btn-pray:hover { background: #a22a1f; color: #fff; text-decoration: none; }
 
     /* WRAPPED polygon labels */
     .poly-label{
@@ -153,19 +160,16 @@
       color: #1f2937;
       font: 12px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
       text-align: center;
-      /* wrap only at spaces/normal breakpoints */
       white-space: normal;
-      overflow-wrap: break-word;   /* NOT 'anywhere' */
-      word-break: keep-all;        /* don't break inside words */
-      max-width: 200px;            /* a bit wider so names fit */
+      overflow-wrap: break-word;   
+      word-break: keep-all;        
+      max-width: 200px;            
       line-height: 1.15;
       text-shadow: 0 1px 2px rgba(255,255,255,.85), 0 0 2px rgba(255,255,255,.9);
       pointer-events: none;
       font-size: var(--label-size, 12px);
-      /* (optional) nicer multi-line balancing in modern browsers */
       text-wrap: balance;
     }
-
 
     .leaflet-tooltip.hover-tip {
       background: #fff; color: #111;
@@ -201,49 +205,48 @@
     @media (min-width: 768px){ .sheet{ display:none !important; } } /* only show on mobile */
     .leaflet-popup-content a, .leaflet-popup-content button{ pointer-events:auto; }
   
-/* === Tag Chips (popup + filters) === */
-.chips { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0 2px; }
-.chip {
-  display:inline-flex; align-items:center; gap:6px;
-  padding:4px 8px; border-radius:999px; font-size:12px; font-weight:600;
-  color:#111; border:1px solid rgba(0,0,0,.12); background:#f3f4f6;
-}
-.chip.dark { color:#fff; border-color: rgba(0,0,0,.25); }
-.chip .dot { width:10px; height:10px; border-radius:999px; box-shadow: inset 0 0 0 1px rgba(0,0,0,.15); }
+    /* === Tag Chips (popup + filters) === */
+    .chips { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0 2px; }
+    .chip {
+      display:inline-flex; align-items:center; gap:6px;
+      padding:4px 8px; border-radius:999px; font-size:12px; font-weight:600;
+      color:#111; border:1px solid rgba(0,0,0,.12); background:#f3f4f6;
+    }
+    .chip.dark { color:#fff; border-color: rgba(0,0,0,.25); }
+    .chip .dot { width:10px; height:10px; border-radius:999px; box-shadow: inset 0 0 0 1px rgba(0,0,0,.15); }
 
-/* === Filters section (Status + Unify Lead) === */
-.filter-section { border:1px solid #e5e7eb; border-radius:10px; padding:8px; background:#f9fafb; margin-bottom:10px; }
-.filter-section h4 { margin:4px 0 8px; font-size:13px; font-weight:700; }
-.filter-group { margin:6px 0 8px; }
-.filter-group .label { font-size:12px; font-weight:700; color:#374151; margin-bottom:4px; }
-.chip-select { display:flex; flex-wrap:wrap; gap:6px; }
-.chip-option { position:relative; display:inline-block; }
-.chip-option input { position:absolute; opacity:0; pointer-events:none; }
-.chip-option label { cursor:pointer; }
-.chip-option input:checked + label { outline:2px solid #111; outline-offset:1px; }
+    /* === Filters section (Status + Unify Lead) === */
+    .filter-section { border:1px solid #e5e7eb; border-radius:10px; padding:8px; background:#f9fafb; margin-bottom:10px; }
+    .filter-section h4 { margin:4px 0 8px; font-size:13px; font-weight:700; }
+    .filter-group { margin:6px 0 8px; }
+    .filter-group .label { font-size:12px; font-weight:700; color:#374151; margin-bottom:4px; }
+    .chip-select { display:flex; flex-wrap:wrap; gap:6px; }
+    .chip-option { position:relative; display:inline-block; }
+    .chip-option input { position:absolute; opacity:0; pointer-events:none; }
+    .chip-option label { cursor:pointer; }
+    .chip-option input:checked + label { outline:2px solid #111; outline-offset:1px; }
 
-.filter-actions { display:flex; gap:8px; margin-top:6px; }
-.filter-actions button {
-  background:#111; color:#fff; border:0; border-radius:8px; padding:6px 10px; font-size:13px; font-weight:700;
-}
-.filter-actions .clear { background:#6b7280; }
+    .filter-actions { display:flex; gap:8px; margin-top:6px; }
+    .filter-actions button {
+      background:#111; color:#fff; border:0; border-radius:8px; padding:6px 10px; font-size:13px; font-weight:700;
+    }
+    .filter-actions .clear { background:#6b7280; }
 
+    /* Collapsible filter blocks */
+    .filters-heading { font-size: 18px; font-weight: 800; margin: 6px 2px 10px; }
+    .filter-block { border:1px solid #e5e7eb; border-radius:10px; background:#f9fafb; margin:8px 0; }
+    .filter-summary {
+      list-style: none; cursor: pointer; padding: 10px 12px; border-radius: 10px;
+      display:flex; align-items:center; justify-content: space-between; gap:8px;
+      background:#f8fafc; border-bottom:1px solid #e5e7eb; font-weight:700; color:#111;
+    }
+    .filter-block[open] .filter-summary { background:#eef2ff; }
+    .filter-block .filter-group { padding: 8px 10px 10px; }
+    .map-and-chips { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:4px; }
+    .chips-inline .chips { display:inline-flex; margin:0; }
+    .legend-list { list-style:none; }
 
-/* Collapsible filter blocks */
-.filters-heading { font-size: 18px; font-weight: 800; margin: 6px 2px 10px; }
-.filter-block { border:1px solid #e5e7eb; border-radius:10px; background:#f9fafb; margin:8px 0; }
-.filter-summary {
-  list-style: none; cursor: pointer; padding: 10px 12px; border-radius: 10px;
-  display:flex; align-items:center; justify-content: space-between; gap:8px;
-  background:#f8fafc; border-bottom:1px solid #e5e7eb; font-weight:700; color:#111;
-}
-.filter-block[open] .filter-summary { background:#eef2ff; }
-.filter-block .filter-group { padding: 8px 10px 10px; }
-.map-and-chips { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:4px; }
-.chips-inline .chips { display:inline-flex; margin:0; }
-.legend-list { list-style:none; }
-
-</style>
+  </style>
 </head>
 <body>
   <div id="navbar-include"></div>
@@ -252,60 +255,49 @@
   <div id="map">
     <div hidden class="map-title">TBC Networks</div>
 
-    <!-- Toggle button on all viewports -->
     <button id="legendToggle" class="legend-toggle" type="button" aria-expanded="false" aria-controls="legendPanel">
       Filter
     </button>
 
-    
-<aside class="legend-panel" id="legendPanel" aria-label="Filters panel">
-  <div class="legend-header">
-    <span id="totalNetworksMobile" class="county-count" style="margin-left:auto">0</span>
-    <div class="legend-grabber" aria-hidden="true"></div>
-    <div class="legend-title">Filters</div>
+    <aside class="legend-panel" id="legendPanel" aria-label="Filters panel">
+      <div class="legend-header">
+        <span id="totalNetworksMobile" class="county-count" style="margin-left:auto">0</span>
+        <div class="legend-grabber" aria-hidden="true"></div>
+        <div class="legend-title">Filters</div>
+      </div>
+
+      <details id="countySection" class="filter-block">
+        <summary class="filter-summary">
+          Network by County <span id="totalNetworksDesktop" class="county-count">0</span>
+        </summary>
+        <div id="legendGroups"></div>
+      </details>
+
+      <section class="filter-section" id="filtersUI" aria-label="Filter controls">
+        <h3 class="filters-heading">Filter Networks</h3>
+
+        <details class="filter-block" id="statusSection">
+          <summary class="filter-summary">Status</summary>
+          <div class="filter-group">
+            <div id="statusChips" class="chip-select"></div>
+          </div>
+        </details>
+
+        <details class="filter-block" id="leadSection">
+          <summary class="filter-summary">Unify Lead</summary>
+          <div class="filter-group">
+            <div id="leadChips" class="chip-select"></div>
+          </div>
+        </details>
+
+        <div class="filter-actions">
+          <button id="applyFilters" type="button">Apply</button>
+          <button id="clearFilters" class="clear" type="button">Clear</button>
+        </div>
+      </section>
+    </aside>
   </div>
 
-<!-- County Section first -->
-<details id="countySection" class="filter-block">
-<summary class="filter-summary">
-Network by County <span id="totalNetworksDesktop" class="county-count">0</span>
-</summary>
-<div id="legendGroups"></div>
-</details>
-
-
-<!-- Filters UI below -->
-<section class="filter-section" id="filtersUI" aria-label="Filter controls">
-<h3 class="filters-heading">Filter Networks</h3>
-
-
-<details class="filter-block" id="statusSection">
-<summary class="filter-summary">Status</summary>
-<div class="filter-group">
-<div id="statusChips" class="chip-select"></div>
-</div>
-</details>
-
-
-<details class="filter-block" id="leadSection">
-<summary class="filter-summary">Unify Lead</summary>
-<div class="filter-group">
-<div id="leadChips" class="chip-select"></div>
-</div>
-</details>
-
-
-<div class="filter-actions">
-<button id="applyFilters" type="button">Apply</button>
-<button id="clearFilters" class="clear" type="button">Clear</button>
-</div>
-</section>
-</aside>
-
-
-  </div>
-
-  <!-- Mobile info sheet (modal) -->
   <div id="infoSheet" class="sheet" aria-hidden="true">
     <div class="sheet-backdrop" data-close="1"></div>
     <div class="sheet-panel" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
@@ -316,29 +308,29 @@ Network by County <span id="totalNetworksDesktop" class="county-count">0</span>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script>
-    // Authentication state (defaults to false until checked)
+    // Authentication state
     let IS_AUTHENTICATED = false;
     
-    // Map with custom zoom control placement (avoid legend overlap)
+    // Map with custom zoom control placement
     const map = L.map('map', { center: [37.8, -122.3], zoom: 9, preferCanvas: true, zoomControl: false });
     L.control.zoom({ position: 'bottomright' }).addTo(map);
 
     // ---- Custom panes for strict z-order ----
-    map.createPane('countiesPane');  // background polygons
+    map.createPane('countiesPane');
     map.getPane('countiesPane').style.zIndex = 200;
 
-    map.createPane('networksPane');  // main polygons
+    map.createPane('networksPane');
     map.getPane('networksPane').style.zIndex = 400;
 
-    map.createPane('labelsPane');    // permanent polygon labels
+    map.createPane('labelsPane');
     map.getPane('labelsPane').style.zIndex = 450;
-    map.getPane('labelsPane').style.pointerEvents = 'none'; // labels never block clicks
+    map.getPane('labelsPane').style.pointerEvents = 'none';
 
-    map.createPane('hoverPane');     // transient hover tooltips
+    map.createPane('hoverPane');
     map.getPane('hoverPane').style.zIndex = 460;
     map.getPane('hoverPane').style.pointerEvents = 'none';
 
-    map.createPane('popupsPane');    // click popups / info windows
+    map.createPane('popupsPane');
     map.getPane('popupsPane').style.zIndex = 700;
 
     // Basemaps
@@ -372,7 +364,6 @@ Network by County <span id="totalNetworksDesktop" class="county-count">0</span>
         const r = parseInt(c.substring(0,2),16)/255;
         const g = parseInt(c.substring(2,4),16)/255;
         const b = parseInt(c.substring(4,6),16)/255;
-        // relative luminance
         const a = [r,g,b].map(v => (v <= 0.03928) ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4));
         return 0.2126*a[0] + 0.7152*a[1] + 0.0722*a[2];
       } catch { return 0.5; }
@@ -401,14 +392,12 @@ Network by County <span id="totalNetworksDesktop" class="county-count">0</span>
     // === Filter state ===
     const selectedStatus = new Set();
     const selectedLeads  = new Set();
-    let allLegendItems = []; // {county, name, color, props, layer}
+    let allLegendItems = []; 
     let allStatusValues = new Set();
     let allLeadValues   = new Set();
-
-    
-    // Track whether each network layer is currently visible on the map
     const layerVisible = new WeakMap();
-function matchesFilters(props){
+
+    function matchesFilters(props){
       const statusVals = toArray(props.status);
       const leadVals   = toArray(props.unify_lead);
       const statusOK = (selectedStatus.size === 0) || statusVals.some(v => selectedStatus.has(v));
@@ -450,32 +439,24 @@ function matchesFilters(props){
       });
     }
 
-    
-function applyFilters(){
-  // 1) Toggle layers by actually removing/adding them so Canvas hit-testing can't trigger events
-  networksGeoJson.eachLayer((layer) => {
-    const props = (layer.feature && layer.feature.properties) || {};
-    const shouldShow = matchesFilters(props);
-    const isShown    = !!layerVisible.get(layer);
+    function applyFilters(){
+      networksGeoJson.eachLayer((layer) => {
+        const props = (layer.feature && layer.feature.properties) || {};
+        const shouldShow = matchesFilters(props);
+        const isShown    = !!layerVisible.get(layer);
 
-    if (shouldShow && !isShown) {
-      // re-add to the networks group
-      layer.addTo(networksGroup);
-      layerVisible.set(layer, true);
-
-      // restore style and label visibility
-      if (layer.getTooltip()) layer.getTooltip().setOpacity(1);
-      layer.setStyle({ fillOpacity: 0.5, opacity: 1.0 });
-    } else if (!shouldShow && isShown) {
-      // clean up any transient hover tooltip
-      if (layer._hoverTip) { map.removeLayer(layer._hoverTip); layer._hoverTip = null; }
-
-      // remove from group so it receives no events in Canvas mode
-      networksGroup.removeLayer(layer);
-      layerVisible.set(layer, false);
+        if (shouldShow && !isShown) {
+          layer.addTo(networksGroup);
+          layerVisible.set(layer, true);
+          if (layer.getTooltip()) layer.getTooltip().setOpacity(1);
+          layer.setStyle({ fillOpacity: 0.5, opacity: 1.0 });
+        } else if (!shouldShow && isShown) {
+          if (layer._hoverTip) { map.removeLayer(layer._hoverTip); layer._hoverTip = null; }
+          networksGroup.removeLayer(layer);
+          layerVisible.set(layer, false);
+        }
+      });
     }
-  });
-  }
 
     function clearFilters(){
       selectedStatus.clear();
@@ -486,7 +467,6 @@ function applyFilters(){
 
     // Hook up buttons after DOM ready
     document.addEventListener('DOMContentLoaded', () => {
-      // Default: hide Team-only filters until auth is confirmed
       const statusSection = document.getElementById('statusSection');
       const leadSection   = document.getElementById('leadSection');
       const filtersUI     = document.getElementById('filtersUI');
@@ -532,16 +512,14 @@ function applyFilters(){
       const showLink = count > 0;
 
       const linkHtml = showLink
-        ? '<a href="/org_map?network='+encodeURIComponent(rawName)+'" target="_blank" rel="noopener">Map of Network Churches</a>'
+        ? '<a href="/org_map.html?network='+encodeURIComponent(rawName)+'" target="_blank" rel="noopener">Map of Network Churches</a>'
         : '';
 
-      // Chips only for authenticated users
       const statusChips = statusArr.length ? chipsHtmlNoDots(statusArr) : '';
       const leadChips   = leadArr.length   ? chipsHtmlNoDots(leadArr)   : '';
       const allChips    = [statusChips, leadChips].filter(Boolean).join(' ');
 
       if (!IS_AUTHENTICATED) {
-        // Public view: link only (if available), no chips
         return showLink ? '<div class="map-and-chips">'+linkHtml+'</div>' : '';
       }
 
@@ -554,67 +532,27 @@ function applyFilters(){
         + '</div>';
     }
 
-    // Prayer Request line (prefer "all" column when available)
-    function prayerLine(props = {}){
-      const raw =
-        props.prayer_request ??
-        props.prayer_requests ??
-        props.all_prayer_requests ??
-        props.latest_prayer_request ??
-        props.prayer_request_latest ??
-        props.prayer_request_latest_update;
-
-      const source = (raw == null ? '' : String(raw)).trim();
-      if (!source) return '';
-
-      const dateBlockPattern = /\b\d{1,2}\/\d{1,2}\/\d{2,4}[\s\S]*?(?=\b\d{1,2}\/\d{1,2}\/\d{2,4}|$)/g;
-      const matches = source.match(dateBlockPattern) || [];
-
-      const segments = [];
-
-      if (matches.length) {
-        let cursor = 0;
-        for (const block of matches) {
-          const idx = source.indexOf(block, cursor);
-          if (idx > cursor) {
-            const prefix = source.slice(cursor, idx).trim();
-            if (prefix) segments.push(prefix);
-          }
-
-          segments.push(block.trim());
-          cursor = idx + block.length;
-        }
-
-        if (cursor < source.length) {
-          const tail = source.slice(cursor).trim();
-          if (tail) segments.push(tail);
-        }
-      } else {
-        segments.push(source);
-      }
-      const formatted = segments
-        .map(part => escapeHtml(part).replace(/\r?\n/g, '<br>'))
-        .join('<br>');
-
-      return '<div class="prayer-request"><span class="label">Prayer Request:</span> ' + formatted + '</div>';
-    }
-
+    // === MODIFIED: Dynamic Info Card (No more static prayer text) ===
     function infoCardHtml(props = {}){
       const rawName = (props.name && String(props.name).trim()) || 'Unnamed';
       const emailLine = props.contact_email ? '<div><span class="label">Email:</span> <a href="mailto:'+props.contact_email+'">'+props.contact_email+'</a></div>' : '';
       const statusArr = toArray(props.status);
       const leadArr   = toArray(props.unify_lead);
       const photos = allPhotos(props);
+      
+      // NEW: Pray Button
+      const prayButtonHtml = `<a href="/network_prayer_request.html?network=${encodeURIComponent(rawName)}" class="btn-pray" target="_blank">Pray for Network</a>`;
+
       return '<div class="tip">'
         + '<div class="tip-name">'+rawName+'</div>'
         + '<div><span class="label">Leaders:</span> '+(props.leaders ?? '—')+'</div>'
         + emailLine
-        + prayerLine(props)
+        // REMOVED: prayerLine(props)
         + churchesLine(rawName, statusArr, leadArr, props)
+        + prayButtonHtml
         + renderGallery(photos)
         + '</div>';
     }
-
 
     // Legend state & helpers
     function computeCountyGroups(items){
@@ -662,18 +600,23 @@ function applyFilters(){
       }
     });
 
+    // Modified Info Sheet HTML (Dynamic)
     function infoSheetHtml(props = {}){
       const rawName = (props.name && String(props.name).trim()) || 'Unnamed';
       const emailLine = props.contact_email ? '<div><span class="label">Email:</span> <a href="mailto:'+props.contact_email+'">'+props.contact_email+'</a></div>' : '';
       const statusArr = toArray(props.status);
       const leadArr   = toArray(props.unify_lead);
       const photos = allPhotos(props);
+      
+      const prayButtonHtml = `<a href="/network_prayer_request.html?network=${encodeURIComponent(rawName)}" class="btn-pray" target="_blank">Pray for Network</a>`;
+
       return '<div class="tip">'
         + '<div class="tip-name" id="sheetTitle">'+rawName+'</div>'
         + '<div><span class="label">Leaders:</span> '+(props.leaders ?? '—')+'</div>'
         + emailLine
-        + prayerLine(props)
+        // REMOVED: prayerLine(props)
         + churchesLine(rawName, statusArr, leadArr, props)
+        + prayButtonHtml
         + renderGallery(photos)
         + '</div>';
     }
@@ -732,9 +675,9 @@ function applyFilters(){
     }
 
     // ========== Robust random-open infrastructure ==========
-    let networksGeoJson;                 // will hold the GeoJSON layer
-    const networksReadyQueue = [];       // callbacks to run after networks are ready
-    let randomOpened = false;            // guard to prevent double-opening
+    let networksGeoJson;                 
+    const networksReadyQueue = [];       
+    let randomOpened = false;            
 
     function onNetworksReady(cb){
       if (networksGeoJson) cb();
@@ -777,7 +720,6 @@ function applyFilters(){
 
         map.fitBounds(bounds.pad(0.15), { animate: true });
         map.once('moveend', openPopupNow);
-        // Fallback in case moveend doesn't fire for any reason
         setTimeout(openPopupNow, 800);
       }
     }
@@ -791,7 +733,6 @@ function applyFilters(){
           pane: 'networksPane',
           style: styleNetworks,
           onEachFeature: (feature, layer) => {
-            // Labels over polygons use cleaned, WRAPPED name
             layer.bindTooltip(cleanedName(feature.properties?.name), { permanent: true, direction: 'center', className: 'poly-label', opacity: 1, pane: 'labelsPane' });
             layer.on('mouseover', (e) => { if (isTouch()) return; 
               highlight(e);
@@ -832,11 +773,10 @@ function applyFilters(){
         const initialGroups = computeCountyGroups(allLegendItems);
         buildCountyLegend(initialGroups);
         
-buildFilterChips();
+        buildFilterChips();
         applyFilters();
         updateLabelSizes();
 
-        // flush queued callbacks
         while (networksReadyQueue.length) {
           try { networksReadyQueue.shift()(); } catch(e) { console.error(e); }
         }
@@ -850,7 +790,6 @@ buildFilterChips();
         return a.localeCompare(b, undefined, { sensitivity: 'base' });
       });
 
-      // Total networks count
       let total = 0;
       groups.forEach(arr => { total += arr.length; });
       if (totalDesktopEl) totalDesktopEl.textContent = total;
@@ -942,7 +881,6 @@ buildFilterChips();
     if (hasRandomParam()) {
       console.log('[Random] param detected');
       onNetworksReady(openRandomNetworkOnce);
-      // extra defense in case networks load *very* quickly or late
       setTimeout(() => onNetworksReady(openRandomNetworkOnce), 100);
       setTimeout(() => onNetworksReady(openRandomNetworkOnce), 600);
     }
