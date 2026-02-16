@@ -412,19 +412,21 @@ export default {
         return jsonResponse({ success: true });
       }
 
-      // Activity Feed (Merged Timeline)
+// 4. ACTIVITY WALL (Merged Feed)
       if (url.pathname === "/users/me/activity" && request.method === "GET") {
         const userId = getUserIdFromHeader(request);
         if (!userId) return jsonResponse({ error: "Unauthorized" }, 401);
 
-        // Fetch My Requests
+        // A. Fetch requests I submitted
         const myRequestsPromise = fetchRecords(env.PRAYER_REQUESTS_TABLE_NAME, {
             formula: `AND({Submitted By}='${userId}', {Status}!='Archived')`,
             sort: [{ field: "Created", direction: "desc" }],
             maxRecords: 50
         });
 
-        // Fetch My Prayer Activity
+        // B. Fetch requests I prayed for (Activity)
+        // Since you added Lookups for Network, Organization, and Leader to this table,
+        // we can now read them directly from 'a.fields' without extra fetches.
         const myActivityPromise = fetchRecords(env.PRAYER_ACTIVITY_TABLE_NAME, {
             formula: `AND({App User}='${userId}', {Status}='Active')`,
             sort: [{ field: "Created", direction: "desc" }],
@@ -435,31 +437,67 @@ export default {
 
         const timeline = [];
 
-        // Map Requests to Timeline Items
-        myRequests.forEach(r => {
+        // 1. Process "Submitted" Items
+            myRequests.forEach(r => {
+            // Determine Subject for display
+            let subjectName = "General Request";
+            let subjectType = "General";
+            
+            // Airtable Link fields are arrays of IDs. 
+            // Note: To get the *Names* here, you would ideally need Lookups in the Requests table too,
+            // or just use generic labels like "Network Request" if names aren't available.
+            // For now, we infer type based on which link exists.
+            if (r.fields["Network"]) subjectType = "Network";
+            else if (r.fields["Organization"]) subjectType = "Organization";
+            else if (r.fields["Leader"]) subjectType = "Leader";
+
             timeline.push({
                 type: "submitted",
                 id: r.id,
-                text: r.fields["Request"],
+                title: "You asked for prayer",
+                subtitle: r.fields["Request"] || "No text",
                 date: r.createdTime,
                 timestamp: new Date(r.createdTime).getTime(),
-                subject: r.fields["Network"] ? "Network" : (r.fields["Organization"] ? "Organization" : "Leader")
+                subjectType: subjectType
             });
         });
 
-        // Map Activity to Timeline Items
+        // 2. Process "Prayed" Items (Activity)
         myActivity.forEach(a => {
+            const f = a.fields;
+            const textSnippet = f["Request Snapshot"] ? f["Request Snapshot"][0] : "Prayer request";
+            
+            // Resolve the Entity Name from your new Lookups
+            // (Lookups return arrays of strings, e.g. ["Bay Area Network"])
+            let entityName = "Prayer Request";
+            let entityType = "Request";
+
+            if (f["Network"] && f["Network"].length > 0) {
+                entityName = f["Network"][0]; // Actual name from lookup
+                entityType = "Network";
+            } else if (f["Organization"] && f["Organization"].length > 0) {
+                entityName = f["Organization"][0];
+                entityType = "Organization";
+            } else if (f["Leader"] && f["Leader"].length > 0) {
+                entityName = f["Leader"][0];
+                entityType = "Leader";
+            }
+
             timeline.push({
                 type: "prayed",
                 id: a.id,
-                requestId: a.fields["Request"] ? a.fields["Request"][0] : null,
+                requestId: f["Request"] ? f["Request"][0] : null,
+                title: `You prayed for ${entityName}`, // e.g. "You prayed for Bay Area Network"
+                subtitle: textSnippet,                 // The request text
                 date: a.createdTime,
-                timestamp: new Date(a.createdTime).getTime()
+                timestamp: new Date(a.createdTime).getTime(),
+                entityType: entityType
             });
         });
 
-        // Sort by Newest First
+        // Sort combined list by time descending (Newest first)
         timeline.sort((a, b) => b.timestamp - a.timestamp);
+
         return jsonResponse({ timeline });
       }
 
