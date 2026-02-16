@@ -430,10 +430,14 @@ export default {
         }
 
         const userData = await userRes.json();
-        // Airtable field names for the links:
-        // You MUST ensure these match your actual column headers in the 'App Users' table
-        const requestIds = userData.fields["Prayer Requests"] || []; // Array of IDs
-        const activityIds = userData.fields["Prayer Activity"] || []; // Array of IDs
+        
+        // --- DEBUGGING START ---
+        console.log("FULL USER RECORD:", JSON.stringify(userData));
+        console.log("Prayer Activity Field Raw:", JSON.stringify(userData.fields["Prayer Activity"]));
+        // --- DEBUGGING END ---
+
+        const requestIds = userData.fields["Prayer Requests"] || []; 
+        const activityIds = userData.fields["Prayer Activity"] || [];
 
         const timeline = [];
 
