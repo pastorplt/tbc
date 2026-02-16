@@ -250,25 +250,92 @@ export default {
         return jsonResponse({ status: "created_pending", message: "Registration submitted." });
       }
 
-      // Verify OTP
+      // 3. AUTH ROUTES (Verify OTP - RESTORED PROFILE DATA)
       if (url.pathname === "/api/auth/verify-otp" && request.method === "POST") {
         const { phone, code } = await request.json();
-        const clean = normalizePhone(phone);
-        
-        // DEV BYPASS: Code "123456" always works
-        // In prod, check KV or Database for valid OTP
-        let isValid = (code === "123456"); 
+        const normalizedPhone = normalizePhone(phone);
+        let isValid = false;
+
+        // Check KV (if bound)
+        if (env.AUTH_STORE) {
+            const storedOtp = await env.AUTH_STORE.get(`otp:${normalizedPhone}`);
+            if (storedOtp && storedOtp === code) {
+                isValid = true;
+                await env.AUTH_STORE.delete(`otp:${normalizedPhone}`);
+            }
+        }
+
+        // DEV BACKDOOR (Keep for testing)
+        if (!isValid && code === "123456") isValid = true;
 
         if (!isValid) return jsonResponse({ error: "Invalid code" }, 401);
 
-        const userRec = await findRecordByPhone(env.USERS_TABLE_NAME, clean);
+        // Fetch User Record
+        const userRec = await findRecordByPhone(env.USERS_TABLE_NAME, normalizedPhone);
         if (!userRec) return jsonResponse({ error: "User not found" }, 404);
 
-        // Session Token Format: session_RECORDID_TIMESTAMP
-        const token = `session_${userRec.id}_${Date.now()}`;
-        return jsonResponse({ token, user: { id: userRec.id, phone: clean } });
-      }
+        const token = `session_${userRec.id}_${Date.now()}`; 
 
+        // 1. Initialize Profile with ID & Phone
+        const userProfile = {
+            id: userRec.id,
+            phone: normalizedPhone,
+            leaderId: userRec.fields["Linked Leader"]?.[0],
+            networkId: userRec.fields["Linked Network"]?.[0],
+            organizationId: userRec.fields["Linked Organization"]?.[0]
+        };
+
+        // 2. Fetch Leader Details (Name, Email)
+        if (userProfile.leaderId) {
+            try {
+                // We use direct ID fetch for speed
+                const leaderRes = await fetch(`https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(env.LEADERS_TABLE_NAME)}/${userProfile.leaderId}`, {
+                    headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` }
+                });
+                if (leaderRes.ok) {
+                    const leaderData = await leaderRes.json();
+                    userProfile.name = leaderData.fields["Leader Name"];
+                    userProfile.email = leaderData.fields["Email"];
+                    
+                    // Fallback: If User table didn't have links, grab them from Leader
+                    if (!userProfile.networkId && leaderData.fields["Network Membership"]?.[0]) {
+                        userProfile.networkId = leaderData.fields["Network Membership"][0];
+                    }
+                    if (!userProfile.organizationId && leaderData.fields["Leads Church"]?.[0]) {
+                        userProfile.organizationId = leaderData.fields["Leads Church"][0];
+                    }
+                }
+            } catch (e) { console.log("Leader fetch failed", e); }
+        }
+
+        // 3. Fetch Network Name
+        if (userProfile.networkId) {
+            try {
+                const netRes = await fetch(`https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(env.NETWORKS_TABLE_NAME)}/${userProfile.networkId}`, {
+                    headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` }
+                });
+                if (netRes.ok) {
+                    const netData = await netRes.json();
+                    userProfile.network = netData.fields["Network Name"];
+                }
+            } catch (e) { console.log("Network fetch failed", e); }
+        }
+
+        // 4. Fetch Organization (Church) Name
+        if (userProfile.organizationId) {
+            try {
+                const orgRes = await fetch(`https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(env.ORGANIZATIONS_TABLE_NAME)}/${userProfile.organizationId}`, {
+                    headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` }
+                });
+                if (orgRes.ok) {
+                    const orgData = await orgRes.json();
+                    userProfile.church = orgData.fields["Org Name"];
+                }
+            } catch (e) { console.log("Org fetch failed", e); }
+        }
+
+        return jsonResponse({ token, user: userProfile });
+      }
       // DEV: Manually Approve User (Restored)
       if (url.pathname === "/api/auth/dev/approve" && request.method === "POST") {
         const { phone } = await request.json();
