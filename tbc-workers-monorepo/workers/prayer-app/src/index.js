@@ -412,41 +412,44 @@ export default {
         return jsonResponse({ success: true });
       }
 
-// 4. ACTIVITY WALL (Merged Feed)
+// 4. ACTIVITY WALL (Merged Feed - Fixed ID Filtering)
       if (url.pathname === "/users/me/activity" && request.method === "GET") {
         const userId = getUserIdFromHeader(request);
         if (!userId) return jsonResponse({ error: "Unauthorized" }, 401);
 
-        // A. Fetch requests I submitted
-        const myRequestsPromise = fetchRecords(env.PRAYER_REQUESTS_TABLE_NAME, {
-            formula: `AND({Submitted By}='${userId}', {Status}!='Archived')`,
+        // A. Fetch Recent Requests (Fetch broadly, filter in memory)
+        // We fetch "Active" or "Pending" requests to ensure we see what we just submitted
+        const requestsPromise = fetchRecords(env.PRAYER_REQUESTS_TABLE_NAME, {
+            formula: "OR({Status}='Active', {Status}='Pending')", 
             sort: [{ field: "Created", direction: "desc" }],
-            maxRecords: 50
+            maxRecords: 100
         });
 
-        // B. Fetch requests I prayed for (Activity)
-        // Since you added Lookups for Network, Organization, and Leader to this table,
-        // we can now read them directly from 'a.fields' without extra fetches.
-        const myActivityPromise = fetchRecords(env.PRAYER_ACTIVITY_TABLE_NAME, {
-            formula: `AND({App User}='${userId}', {Status}='Active')`,
+        // B. Fetch Recent Activity (Fetch broadly, filter in memory)
+        const activityPromise = fetchRecords(env.PRAYER_ACTIVITY_TABLE_NAME, {
+            formula: "{Status}='Active'",
             sort: [{ field: "Created", direction: "desc" }],
-            maxRecords: 50
+            maxRecords: 100
         });
 
-        const [myRequests, myActivity] = await Promise.all([myRequestsPromise, myActivityPromise]);
+        const [allRequests, allActivity] = await Promise.all([requestsPromise, activityPromise]);
+
+        // Filter: Keep only records linked to THIS userId
+        // Airtable returns Linked Fields as arrays of IDs: ["rec123..."]
+        const myRequests = allRequests.filter(r => 
+            r.fields["Submitted By"] && r.fields["Submitted By"].includes(userId)
+        );
+        
+        const myActivity = allActivity.filter(a => 
+            a.fields["App User"] && a.fields["App User"].includes(userId)
+        );
 
         const timeline = [];
 
         // 1. Process "Submitted" Items
-            myRequests.forEach(r => {
+        myRequests.forEach(r => {
             // Determine Subject for display
-            let subjectName = "General Request";
             let subjectType = "General";
-            
-            // Airtable Link fields are arrays of IDs. 
-            // Note: To get the *Names* here, you would ideally need Lookups in the Requests table too,
-            // or just use generic labels like "Network Request" if names aren't available.
-            // For now, we infer type based on which link exists.
             if (r.fields["Network"]) subjectType = "Network";
             else if (r.fields["Organization"]) subjectType = "Organization";
             else if (r.fields["Leader"]) subjectType = "Leader";
@@ -467,13 +470,12 @@ export default {
             const f = a.fields;
             const textSnippet = f["Request Snapshot"] ? f["Request Snapshot"][0] : "Prayer request";
             
-            // Resolve the Entity Name from your new Lookups
-            // (Lookups return arrays of strings, e.g. ["Bay Area Network"])
+            // Resolve Entity Name from Lookups (if available) or Fallbacks
             let entityName = "Prayer Request";
             let entityType = "Request";
 
             if (f["Network"] && f["Network"].length > 0) {
-                entityName = f["Network"][0]; // Actual name from lookup
+                entityName = f["Network"][0]; 
                 entityType = "Network";
             } else if (f["Organization"] && f["Organization"].length > 0) {
                 entityName = f["Organization"][0];
@@ -487,8 +489,8 @@ export default {
                 type: "prayed",
                 id: a.id,
                 requestId: f["Request"] ? f["Request"][0] : null,
-                title: `You prayed for ${entityName}`, // e.g. "You prayed for Bay Area Network"
-                subtitle: textSnippet,                 // The request text
+                title: `You prayed for ${entityName}`,
+                subtitle: textSnippet,
                 date: a.createdTime,
                 timestamp: new Date(a.createdTime).getTime(),
                 entityType: entityType
