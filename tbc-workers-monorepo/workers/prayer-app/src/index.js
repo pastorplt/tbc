@@ -395,6 +395,41 @@ export default {
         return jsonResponse({ timeline });
       }
 
+      // 3.5 PUBLIC PRAYER REQUESTS (Dynamic Fetch for Maps)
+      // GET /public/requests?networkId=... (or organizationId, leaderId)
+      if (url.pathname === "/public/requests" && request.method === "GET") {
+        const networkId = url.searchParams.get("networkId");
+        const orgId = url.searchParams.get("organizationId") || url.searchParams.get("orgId");
+        const leaderId = url.searchParams.get("leaderId");
+
+        // 1. Fetch all ACTIVE + PUBLIC requests
+        // We fetch the recent active list and filter in memory to ensure we match the Linked Record ID correctly
+        const activeRequests = await fetchRecords(env.PRAYER_REQUESTS_TABLE_NAME, {
+          formula: "AND({Status}='Active', {Visibility}='Public')",
+          sort: [{ field: "Created", direction: "desc" }],
+          maxRecords: 100 
+        });
+
+        // 2. Filter for the specific target
+        const matches = activeRequests.filter(r => {
+           const f = r.fields;
+           // Check if the target ID exists in the linked array
+           if (networkId && f["Network"] && f["Network"].includes(networkId)) return true;
+           if (orgId && f["Organization"] && f["Organization"].includes(orgId)) return true;
+           if (leaderId && f["Leader"] && f["Leader"].includes(leaderId)) return true;
+           return false;
+        });
+
+        // 3. Return simplified response
+        return jsonResponse({
+          requests: matches.map(r => ({
+              id: r.id,
+              text: r.fields["Request"],
+              created: r.createdTime
+          }))
+        });
+      }
+      
       // 4. LEGACY / HYBRID SUBMISSION ROUTES
 
       // App Submit (iOS App Registration Flow / Wizard)
