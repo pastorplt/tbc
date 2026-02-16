@@ -432,49 +432,81 @@ export default {
       
       // 4. LEGACY / HYBRID SUBMISSION ROUTES
 
-      // App Submit (iOS App Registration Flow / Wizard)
+     // 2. APP SUBMIT PRAYER (Flexible: Network, Org, or Leader)
       if (url.pathname === "/app-submit-prayer" && request.method === "POST") {
         const body = await request.json();
-        const { networkId, church, leader, request: reqText, userId } = body; 
-        const authUserId = getUserIdFromHeader(request) || userId;
-
-        if (!networkId || !reqText) return jsonResponse({ error: "Missing fields" }, 400);
-
-        let finalChurchId = church.id;
-        // Create Church on the fly if new
-        if (church.isNew) {
-             const newOrg = await createRecord(env.ORGANIZATIONS_TABLE_NAME, {
-                "Org Name": church.name,
-                "Address": church.address, 
-                "Org Type": church.type, 
-                "Network": [networkId]
-             });
-             finalChurchId = newOrg.id;
+        const { networkId, church, leader, request: reqText, userId } = body;
+        
+        // Extract User ID from Header or Body
+        let authUserId = userId;
+        const authHeader = request.headers.get("Authorization");
+        if (authHeader) {
+             const token = authHeader.replace(/^Bearer\s+/i, "");
+             const parts = token.split("_");
+             if (parts.length >= 2 && parts[0] === "session" && parts[1].startsWith("rec")) {
+                authUserId = parts[1];
+             }
         }
 
-        let finalLeaderId = leader.id;
-        // Create Leader on the fly if new
-        if (leader.isNew) {
-             const newLeader = await createRecord(env.LEADERS_TABLE_NAME, {
-                "Leader Name": leader.name,
-                "Email": leader.email,
-                "Phone": leader.phone ? normalizePhone(leader.phone) : "",
-                "Leads Church": [finalChurchId] 
-             });
-             finalLeaderId = newLeader.id;
+        if (!reqText) return jsonResponse({ error: "Missing request text" }, 400);
+
+        // Validation: At least one target is required
+        const hasNetwork = !!networkId;
+        const hasChurch  = church && (church.id || church.isNew);
+        const hasLeader  = leader && (leader.id || leader.isNew);
+
+        if (!hasNetwork && !hasChurch && !hasLeader) {
+             return jsonResponse({ error: "Must target at least one: Network, Church, or Leader" }, 400);
         }
 
+        // Handle Church Logic (Create if New)
+        let finalChurchId = null;
+        if (church) {
+            if (church.isNew && church.name) {
+                const newOrg = await createRecord(env.ORGANIZATIONS_TABLE_NAME, {
+                    "Org Name": church.name,
+                    "Address": church.address, 
+                    "Org Type": church.type, 
+                    "Network": networkId ? [networkId] : []
+                });
+                finalChurchId = newOrg.id;
+            } else {
+                finalChurchId = church.id;
+            }
+        }
+
+        // Handle Leader Logic (Create if New)
+        let finalLeaderId = null;
+        if (leader) {
+            if (leader.isNew && leader.name) {
+                const newLeader = await createRecord(env.LEADERS_TABLE_NAME, {
+                    "Leader Name": leader.name,
+                    "Email": leader.email,
+                    "Phone": leader.phone ? normalizePhone(leader.phone) : "",
+                    "Leads Church": finalChurchId ? [finalChurchId] : [] 
+                });
+                finalLeaderId = newLeader.id;
+            } else {
+                finalLeaderId = leader.id;
+            }
+        }
+
+        // Build Record Fields
         const fields = {
             "Request": reqText,
-            "Network": [networkId],
-            "Organization": [finalChurchId],
-            "Leader": [finalLeaderId],
             "Status": "Pending",
             "Visibility": "Public"
         };
+
+        if (networkId) fields["Network"] = [networkId];
+        if (finalChurchId) fields["Organization"] = [finalChurchId];
+        if (finalLeaderId) fields["Leader"] = [finalLeaderId];
         if (authUserId) fields["Submitted By"] = [authUserId];
 
-        await createRecord(env.PRAYER_REQUESTS_TABLE_NAME, fields);
+        // Uses the table name variable present in your file (falls back to string if var missing)
+        const targetTable = env.PRAYER_REQUESTS_TABLE_NAME || env.IN_PRAYER_REQUESTS_TABLE_NAME || "Prayer Requests";
+
+        await createRecord(targetTable, fields);
         return jsonResponse({ success: true, churchId: finalChurchId, leaderId: finalLeaderId });
       }
 
