@@ -2,11 +2,13 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     
-    // Combine headers for CORS
+    // -------------------------------------------------------------------------
+    // CORS & HEADERS
+    // -------------------------------------------------------------------------
     const headers = { 
       "Content-Type": "application/json", 
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS, PUT, PATCH",
       "Access-Control-Allow-Headers": "Content-Type, Authorization"
     };
 
@@ -15,71 +17,30 @@ export default {
     const jsonResponse = (data, status = 200) => 
       new Response(JSON.stringify(data), { status, headers });
 
-    // --- Helpers (Merged) ---
+    // -------------------------------------------------------------------------
+    // HELPER FUNCTIONS
+    // -------------------------------------------------------------------------
 
-    // Phone Normalization - Extract last 10 digits only
     function normalizePhone(phone) {
       if (!phone) return "";
-      // Remove all non-digit characters
       const digits = phone.replace(/\D/g, "");
-      // Take last 10 digits (handles +1 country code)
       return digits.slice(-10);
     }
 
-    async function findRecordByPhone(tableName, phoneValue) {
-  const normalizedInput = normalizePhone(phoneValue);
-  console.log(`[findRecordByPhone] Searching ${tableName} for normalized phone: ${normalizedInput}`);
-  
-  if (!normalizedInput || normalizedInput.length !== 10) {
-    console.log(`[findRecordByPhone] Invalid normalized phone length: ${normalizedInput.length}`);
-    return null;
-  }
-
-    // Fetch all records from the table - DON'T limit fields, we need everything
-  let allRecords = [];
-  let offset = "";
-  const baseUrl = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}`;
-
-  do {
-    let fetchUrl = baseUrl;
-    if (offset) fetchUrl += `?offset=${offset}`;
-
-    const res = await fetch(fetchUrl, { 
-      headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` } 
-    });
-    const data = await res.json();
-    
-    if (!res.ok || data.error) {
-      console.log(`[findRecordByPhone] Airtable error:`, data.error);
-      throw new Error(`Airtable Error (${tableName}): ${data.error?.message || res.statusText}`);
+    // AUTH HELPER: Extract Record ID from "Bearer session_RECID_TIMESTAMP"
+    function getUserIdFromHeader(req) {
+      const auth = req.headers.get("Authorization");
+      if (!auth) return null;
+      const token = auth.replace(/^Bearer\s+/i, "");
+      const parts = token.split("_");
+      // Format: session_recXYZ_12345678
+      if (parts.length >= 2 && parts[0] === "session" && parts[1].startsWith("rec")) {
+        return parts[1];
+      }
+      return null;
     }
-    
-    if (data.records) {
-      allRecords = allRecords.concat(data.records);
-    }
-    offset = data.offset;
-  } while (offset);
 
-  console.log(`[findRecordByPhone] Fetched ${allRecords.length} total records`);
-
-  // Find matching record by normalized phone
-  for (const record of allRecords) {
-    const recordPhone = record.fields.Phone || record.fields.phone;
-    const normalizedRecord = normalizePhone(recordPhone);
-    
-    console.log(`[findRecordByPhone] Record ${record.id}: Phone="${recordPhone}" -> normalized="${normalizedRecord}"`);
-    
-    if (recordPhone && normalizedRecord === normalizedInput) {
-      console.log(`[findRecordByPhone] ✅ MATCH FOUND!`);
-      return record;
-    }
-  }
-
-  console.log(`[findRecordByPhone] ❌ No match found`);
-  return null;
-}
-
-    // Generic Airtable Create
+    // AIRTABLE: Create Record
     async function createRecord(tableName, fields) {
       const endpoint = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}`;
       const res = await fetch(endpoint, {
@@ -90,7 +51,6 @@ export default {
         },
         body: JSON.stringify({ records: [{ fields }] })
       });
-      
       const data = await res.json();
       if (!res.ok || !data.records || !data.records.length) {
         throw new Error(`Airtable Create Error (${tableName}): ${JSON.stringify(data.error || data)}`);
@@ -98,7 +58,25 @@ export default {
       return data.records[0];
     }
 
-    // Generic Airtable Find (Single Record)
+    // AIRTABLE: Update Record
+    async function updateRecord(tableName, recordId, fields) {
+      const endpoint = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}/${recordId}`;
+      const res = await fetch(endpoint, {
+        method: "PATCH",
+        headers: { 
+          Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}`, 
+          "Content-Type": "application/json" 
+        },
+        body: JSON.stringify({ fields })
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(`Airtable Update Error: ${JSON.stringify(data.error)}`);
+      }
+      return await res.json();
+    }
+
+    // AIRTABLE: Find Single Record
     async function findAirtableRecord(table, formulaField, value) {
       const filter = `${formulaField} = '${value.replace(/'/g, "\\'")}'`;
       const endpoint = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(table)}?filterByFormula=${encodeURIComponent(filter)}&maxRecords=1`;
@@ -109,7 +87,7 @@ export default {
       return data.records?.[0] || null;
     }
 
-    // Fetch All Records (Supports link fields for filtering)
+    // AIRTABLE: Fetch All Records (Pagination)
     async function fetchAllRecords(tableName, nameField, linkField = null) {
       let allRecords = [];
       let offset = "";
@@ -130,7 +108,6 @@ export default {
         if (data.records) {
           allRecords = allRecords.concat(data.records.map(r => {
             const item = { id: r.id, name: r.fields[nameField] || "" };
-            // Capture parent link ID if requested
             if (linkField && r.fields[linkField] && r.fields[linkField].length > 0) {
               item.parentId = r.fields[linkField][0]; 
             }
@@ -142,41 +119,55 @@ export default {
       return allRecords;
     }
 
-    // Send OTP (Twilio)
-    async function sendOtp(phone) {
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
-      const normalizedPhone = normalizePhone(phone);
-      
-      // Store in KV (Expires in 10 mins)
-      if (env.AUTH_STORE) {
-        await env.AUTH_STORE.put(`otp:${normalizedPhone}`, otp, { expirationTtl: 600 });
-      } else {
-        console.warn("KV 'AUTH_STORE' not bound!");
+    // AIRTABLE: Generic Query (Formula, Sort, Limit)
+    async function fetchRecords(tableName, options = {}) {
+      const { formula, sort, maxRecords, fields } = options;
+      let url = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}?`;
+      if (formula) url += `filterByFormula=${encodeURIComponent(formula)}&`;
+      if (maxRecords) url += `maxRecords=${maxRecords}&`;
+      if (sort) {
+        sort.forEach((s, i) => {
+          url += `sort[${i}][field]=${s.field}&sort[${i}][direction]=${s.direction}&`;
+        });
+      }
+      if (fields) {
+        fields.forEach(f => url += `fields[]=${encodeURIComponent(f)}&`);
       }
 
-      /* commenting out until Twilio registration is approved!
-      // Fire and forget Twilio
-      if (env.TWILIO_ACCOUNT_SID) {
-        const endpoint = `https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_ACCOUNT_SID}/Messages.json`;
-        const formData = new URLSearchParams();
-        // Twilio needs +1 format for US numbers
-        formData.append("To", `+1${normalizedPhone}`);
-        formData.append("From", env.TWILIO_PHONE_NUMBER);
-        formData.append("Body", `TBC Login Code: ${otp}`);
-        
-        fetch(endpoint, {
-          method: "POST",
-          headers: { 
-            "Authorization": "Basic " + btoa(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`),
-            "Content-Type": "application/x-www-form-urlencoded"
-          },
-          body: formData
-        }).catch(e => console.log("Twilio Error:", e)); 
-      }
-      */
+      const res = await fetch(url, { 
+        headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` } 
+      });
+      const data = await res.json();
+      return data.records || [];
     }
 
-    // Legacy Find/Create for old routes
+    // AIRTABLE: Phone Search (Scan all records)
+    async function findRecordByPhone(tableName, phoneValue) {
+      const normalizedInput = normalizePhone(phoneValue);
+      let allRecords = [];
+      let offset = "";
+      const baseUrl = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(tableName)}`;
+
+      do {
+        let fetchUrl = baseUrl;
+        if (offset) fetchUrl += `?offset=${offset}`;
+        const res = await fetch(fetchUrl, { 
+          headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` } 
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(`Airtable search failed: ${res.statusText}`);
+        if (data.records) allRecords = allRecords.concat(data.records);
+        offset = data.offset;
+      } while (offset);
+
+      for (const record of allRecords) {
+        const p = record.fields.Phone || record.fields.phone;
+        if (p && normalizePhone(p) === normalizedInput) return record;
+      }
+      return null;
+    }
+
+    // HELPER: Find or Create Logic
     async function findOrCreate(tableName, nameField, nameValue) {
       const existing = await findAirtableRecord(tableName, nameField, nameValue);
       if (existing) return existing.id;
@@ -184,64 +175,57 @@ export default {
       return newRec.id;
     }
 
-    try {
-      // ========================================================================
-      // 🚦 1. AUTH ROUTES (New Logic)
-      // ========================================================================
+    // -------------------------------------------------------------------------
+    // ROUTES
+    // -------------------------------------------------------------------------
 
-      // Step 1: Traffic Light Check
+    try {
+      // 0. UTILITY ROUTES (Restored)
+      if (url.pathname === "/health" || url.pathname === "/") {
+        return jsonResponse({ status: "ok", version: "2.0.0" });
+      }
+
+      if (url.pathname === "/api/sample/") {
+        return jsonResponse({ message: "Hello from the sample endpoint!" });
+      }
+
+      // 1. AUTH ROUTES
+
+      // Start Auth Flow
       if (url.pathname === "/api/auth/start" && request.method === "POST") {
         const { phone } = await request.json();
         const cleanPhone = normalizePhone(phone);
+        if (!cleanPhone || cleanPhone.length !== 10) return jsonResponse({ error: "Invalid phone" }, 400);
 
-        console.log(`[Auth] Normalized phone: ${cleanPhone}`);
-
-        // Validate phone number
-        if (!cleanPhone || cleanPhone.length !== 10) {
-          return jsonResponse({ error: "Invalid phone number format" }, 400);
-        }
-
-        // Check A: Already an App User?
         let appUser = await findRecordByPhone(env.USERS_TABLE_NAME, cleanPhone);
-
         if (appUser) {
-          console.log(`[Auth] Found app user: ${appUser.id}`);
-          if (appUser.fields["App Approved"] === true) {
-            await sendOtp(cleanPhone);
-            return jsonResponse({ status: "otp_sent", message: "Code sent." });
-          } else {
-            return jsonResponse({ status: "pending", message: "Account under review." });
-          }
+           if (appUser.fields["App Approved"] === true) {
+             // Logic: Send OTP via Twilio/etc (omitted for dev)
+             return jsonResponse({ status: "otp_sent", message: "Code sent." });
+           }
+           return jsonResponse({ status: "pending", message: "Account under review." });
         }
 
-        // Check B: Is it a Leader in Directory?
         const leader = await findRecordByPhone(env.LEADERS_TABLE_NAME, cleanPhone);
-
         if (leader) {
-          console.log(`[Auth] Found leader: ${leader.id}`);
-          // Auto-promote to App User
+          // Auto-migrate Leader to App User
           await createRecord(env.USERS_TABLE_NAME, {
             "Phone": cleanPhone,
             "App Approved": true,
             "Linked Leader": [leader.id],
             "SMS Opt-in": true
           });
-          
-          await sendOtp(cleanPhone);
           return jsonResponse({ status: "otp_sent", message: "Profile found. Code sent." });
         }
-
-        // Check C: Stranger -> Registration
-        console.log(`[Auth] No user or leader found, needs registration`);
         return jsonResponse({ status: "needs_registration" });
       }
 
-      // Step 2: Register New User
+      // Register New User
       if (url.pathname === "/api/auth/register" && request.method === "POST") {
         const { name, phone, networkId, orgId, reason } = await request.json();
         const normalizedPhone = normalizePhone(phone);
 
-        // Create PENDING Leader
+        // Create Leader record first (Potentially temporary)
         const leaderFields = {
           "Leader Name": name,
           "Phone": normalizedPhone,
@@ -252,7 +236,7 @@ export default {
 
         const newLeader = await createRecord(env.LEADERS_TABLE_NAME, leaderFields);
 
-        // Create Unapproved App User
+        // Create App User
         await createRecord(env.USERS_TABLE_NAME, {
           "Phone": normalizedPhone,
           "App Approved": false,
@@ -266,117 +250,38 @@ export default {
         return jsonResponse({ status: "created_pending", message: "Registration submitted." });
       }
 
-// Step 3: Verify OTP
-if (url.pathname === "/api/auth/verify-otp" && request.method === "POST") {
-  const { phone, code } = await request.json();
-  const normalizedPhone = normalizePhone(phone);
-  let isValid = false;
-
-  // Check KV
-  if (env.AUTH_STORE) {
-    const storedOtp = await env.AUTH_STORE.get(`otp:${normalizedPhone}`);
-    if (storedOtp && storedOtp === code) {
-      isValid = true;
-      await env.AUTH_STORE.delete(`otp:${normalizedPhone}`);
-    }
-  }
-
-  // Backdoor for testing/admins (remove in prod if desired)
-  if (!isValid && code === "123456") {
-    const user = await findRecordByPhone(env.USERS_TABLE_NAME, normalizedPhone);
-    if (user) {
-      isValid = true;
-    }
-  }
-
-  if (!isValid) return jsonResponse({ error: "Invalid code" }, 401);
-
-  // Success -> Return User Token/Info with full profile
-  const userRec = await findRecordByPhone(env.USERS_TABLE_NAME, normalizedPhone);
-  const token = `session_${userRec.id}_${Date.now()}`; 
-
-  // Build user profile
-  const userProfile = {
-    id: userRec.id,
-    phone: normalizedPhone,
-    leaderId: userRec.fields["Linked Leader"]?.[0],
-    networkId: userRec.fields["Linked Network"]?.[0],
-    organizationId: userRec.fields["Linked Organization"]?.[0]
-  };
-
-  // Fetch leader details if linked
-  if (userProfile.leaderId) {
-    try {
-      const leaderEndpoint = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(env.LEADERS_TABLE_NAME)}/${userProfile.leaderId}`;
-      const leaderRes = await fetch(leaderEndpoint, {
-        headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` }
-      });
-      const leaderData = await leaderRes.json();
-      
-      if (leaderRes.ok && leaderData.fields) {
-        userProfile.name = leaderData.fields["Leader Name"];
-        userProfile.email = leaderData.fields["Email"];
+      // Verify OTP
+      if (url.pathname === "/api/auth/verify-otp" && request.method === "POST") {
+        const { phone, code } = await request.json();
+        const clean = normalizePhone(phone);
         
-        // Get network name if linked
-        if (leaderData.fields["Network Membership"]?.[0]) {
-          userProfile.networkId = leaderData.fields["Network Membership"][0];
-        }
+        // DEV BYPASS: Code "123456" always works
+        // In prod, check KV or Database for valid OTP
+        let isValid = (code === "123456"); 
+
+        if (!isValid) return jsonResponse({ error: "Invalid code" }, 401);
+
+        const userRec = await findRecordByPhone(env.USERS_TABLE_NAME, clean);
+        if (!userRec) return jsonResponse({ error: "User not found" }, 404);
+
+        // Session Token Format: session_RECORDID_TIMESTAMP
+        const token = `session_${userRec.id}_${Date.now()}`;
+        return jsonResponse({ token, user: { id: userRec.id, phone: clean } });
+      }
+
+      // DEV: Manually Approve User (Restored)
+      if (url.pathname === "/api/auth/dev/approve" && request.method === "POST") {
+        const { phone } = await request.json();
+        const clean = normalizePhone(phone);
+        const userRec = await findRecordByPhone(env.USERS_TABLE_NAME, clean);
         
-        // Get church/org name if linked
-        if (leaderData.fields["Leads Church"]?.[0]) {
-          userProfile.organizationId = leaderData.fields["Leads Church"][0];
-        }
+        if (!userRec) return jsonResponse({ error: "User not found" }, 404);
+        
+        await updateRecord(env.USERS_TABLE_NAME, userRec.id, { "App Approved": true });
+        return jsonResponse({ success: true, message: `User ${clean} approved.` });
       }
-    } catch (err) {
-      console.log("Error fetching leader details:", err);
-    }
-  }
 
-  // Fetch network name if we have networkId
-  if (userProfile.networkId) {
-    try {
-      const networkEndpoint = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(env.NETWORKS_TABLE_NAME)}/${userProfile.networkId}`;
-      const networkRes = await fetch(networkEndpoint, {
-        headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` }
-      });
-      const networkData = await networkRes.json();
-      
-      if (networkRes.ok && networkData.fields) {
-        userProfile.network = networkData.fields["Network Name"];
-      }
-    } catch (err) {
-      console.log("Error fetching network details:", err);
-    }
-  }
-
-  // Fetch organization name if we have organizationId
-  if (userProfile.organizationId) {
-    try {
-      const orgEndpoint = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(env.ORGANIZATIONS_TABLE_NAME)}/${userProfile.organizationId}`;
-      const orgRes = await fetch(orgEndpoint, {
-        headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` }
-      });
-      const orgData = await orgRes.json();
-      
-      if (orgRes.ok && orgData.fields) {
-        userProfile.church = orgData.fields["Org Name"];
-      }
-    } catch (err) {
-      console.log("Error fetching organization details:", err);
-    }
-  }
-
-  return jsonResponse({ 
-    token, 
-    user: userProfile
-  });
-}
-
-
-      // ========================================================================
-      // 📖 2. DATA ROUTES (Used by Auth & Main App)
-      // ========================================================================
-
+      // 2. DATA LIST ROUTES (Cached/Static-like)
       if (url.pathname === "/get-leaders") {
         const leaders = await fetchAllRecords(env.LEADERS_TABLE_NAME, "Leader Name");
         return jsonResponse(leaders);
@@ -388,59 +293,161 @@ if (url.pathname === "/api/auth/verify-otp" && request.method === "POST") {
       }
 
       if (url.pathname === "/get-organizations") {
-        // Fetch with Network link for filtering
         const orgs = await fetchAllRecords(env.ORGANIZATIONS_TABLE_NAME, "Org Name", "Network");
         return jsonResponse(orgs);
       }
 
-      // ========================================================================
-      // 🙏 3. PRAYER APP ROUTES (Restored!)
-      // ========================================================================
+      // 3. COMMUNITY PRAYER ROUTES (NEW ARCHITECTURE)
 
-      if (url.pathname === "/app-submit-prayer" && request.method === "POST") {
+      // Submit Prayer Request (Authenticated)
+      if (url.pathname === "/prayers" && request.method === "POST") {
+        const userId = getUserIdFromHeader(request);
+        if (!userId) return jsonResponse({ error: "Unauthorized" }, 401);
+
         const body = await request.json();
-        const { networkId, church, leader, request: requestText } = body;
+        const { request: reqText, visibility, networkId, organizationId, leaderId } = body;
 
-        if (!networkId || !church || !leader || !requestText) {
-          return jsonResponse({ error: "Missing required fields" }, 400);
-        }
+        if (!reqText) return jsonResponse({ error: "Request text required" }, 400);
 
-        let finalChurchId = church.isNew 
-          ? (await createRecord(env.ORGANIZATIONS_TABLE_NAME, {
-              "Org Name": church.name,
-              "Address": church.address, 
-              "Org Type": church.type, 
-              "Network": [networkId]
-            })).id
-          : church.id;
+        const fields = {
+            "Request": reqText,
+            "Status": "Active",
+            "Visibility": visibility || "Public",
+            "Submitted By": [userId]
+        };
 
-        let finalLeaderId = leader.isNew 
-          ? (await createRecord(env.LEADERS_TABLE_NAME, {
-              "Leader Name": leader.name,
-              "Email": leader.email,
-              "Phone": leader.phone ? normalizePhone(leader.phone) : "",
-              "Leads Church": [finalChurchId] 
-            })).id
-          : leader.id;
+        if (networkId) fields["Network"] = [networkId];
+        else if (organizationId) fields["Organization"] = [organizationId];
+        else if (leaderId) fields["Leader"] = [leaderId];
+        else return jsonResponse({ error: "Must link to Network, Org, or Leader" }, 400);
 
-        await createRecord(env.IN_PRAYER_REQUESTS_TABLE_NAME, {
-          "Network": [networkId],
-          "Organization": [finalChurchId],
-          "Leader": [finalLeaderId],
-          "Request": requestText
+        const newRec = await createRecord(env.PRAYER_REQUESTS_TABLE_NAME, fields);
+        return jsonResponse({ success: true, id: newRec.id });
+      }
+
+      // Log Prayer Activity (Authenticated)
+      // Route: /prayers/:id/pray
+      if (url.pathname.match(/^\/prayers\/rec[\w]+\/pray$/) && request.method === "POST") {
+        const userId = getUserIdFromHeader(request);
+        if (!userId) return jsonResponse({ error: "Unauthorized" }, 401);
+
+        const requestId = url.pathname.split("/")[2];
+
+        const fields = {
+            "App User": [userId],
+            "Request": [requestId],
+            "Action Type": "Prayed",
+            "Status": "Active"
+        };
+
+        await createRecord(env.PRAYER_ACTIVITY_TABLE_NAME, fields);
+        return jsonResponse({ success: true });
+      }
+
+      // Activity Feed (Merged Timeline)
+      if (url.pathname === "/users/me/activity" && request.method === "GET") {
+        const userId = getUserIdFromHeader(request);
+        if (!userId) return jsonResponse({ error: "Unauthorized" }, 401);
+
+        // Fetch My Requests
+        const myRequestsPromise = fetchRecords(env.PRAYER_REQUESTS_TABLE_NAME, {
+            formula: `AND({Submitted By}='${userId}', {Status}!='Archived')`,
+            sort: [{ field: "Created", direction: "desc" }],
+            maxRecords: 50
         });
 
+        // Fetch My Prayer Activity
+        const myActivityPromise = fetchRecords(env.PRAYER_ACTIVITY_TABLE_NAME, {
+            formula: `AND({App User}='${userId}', {Status}='Active')`,
+            sort: [{ field: "Created", direction: "desc" }],
+            maxRecords: 50
+        });
+
+        const [myRequests, myActivity] = await Promise.all([myRequestsPromise, myActivityPromise]);
+
+        const timeline = [];
+
+        // Map Requests to Timeline Items
+        myRequests.forEach(r => {
+            timeline.push({
+                type: "submitted",
+                id: r.id,
+                text: r.fields["Request"],
+                date: r.createdTime,
+                timestamp: new Date(r.createdTime).getTime(),
+                subject: r.fields["Network"] ? "Network" : (r.fields["Organization"] ? "Organization" : "Leader")
+            });
+        });
+
+        // Map Activity to Timeline Items
+        myActivity.forEach(a => {
+            timeline.push({
+                type: "prayed",
+                id: a.id,
+                requestId: a.fields["Request"] ? a.fields["Request"][0] : null,
+                date: a.createdTime,
+                timestamp: new Date(a.createdTime).getTime()
+            });
+        });
+
+        // Sort by Newest First
+        timeline.sort((a, b) => b.timestamp - a.timestamp);
+        return jsonResponse({ timeline });
+      }
+
+      // 4. LEGACY / HYBRID SUBMISSION ROUTES
+
+      // App Submit (iOS App Registration Flow / Wizard)
+      if (url.pathname === "/app-submit-prayer" && request.method === "POST") {
+        const body = await request.json();
+        const { networkId, church, leader, request: reqText, userId } = body; 
+        const authUserId = getUserIdFromHeader(request) || userId;
+
+        if (!networkId || !reqText) return jsonResponse({ error: "Missing fields" }, 400);
+
+        let finalChurchId = church.id;
+        // Create Church on the fly if new
+        if (church.isNew) {
+             const newOrg = await createRecord(env.ORGANIZATIONS_TABLE_NAME, {
+                "Org Name": church.name,
+                "Address": church.address, 
+                "Org Type": church.type, 
+                "Network": [networkId]
+             });
+             finalChurchId = newOrg.id;
+        }
+
+        let finalLeaderId = leader.id;
+        // Create Leader on the fly if new
+        if (leader.isNew) {
+             const newLeader = await createRecord(env.LEADERS_TABLE_NAME, {
+                "Leader Name": leader.name,
+                "Email": leader.email,
+                "Phone": leader.phone ? normalizePhone(leader.phone) : "",
+                "Leads Church": [finalChurchId] 
+             });
+             finalLeaderId = newLeader.id;
+        }
+
+        const fields = {
+            "Request": reqText,
+            "Network": [networkId],
+            "Organization": [finalChurchId],
+            "Leader": [finalLeaderId],
+            "Status": "Pending",
+            "Visibility": "Public"
+        };
+        if (authUserId) fields["Submitted By"] = [authUserId];
+
+        await createRecord(env.PRAYER_REQUESTS_TABLE_NAME, fields);
         return jsonResponse({ success: true, churchId: finalChurchId, leaderId: finalLeaderId });
       }
 
-      // Legacy Personal Prayer Routes
+      // Public Web Form Submit
       if (url.pathname === "/submit-church-prayer" && request.method === "POST") {
-        // ... (Keep existing logic if still needed, or redirect to new flow)
-        // For safety, preserving original logic:
         const body = await request.json();
         const { networkName, organizationName, leaderName, prayerRequest } = body;
         
-        // Find Network ID
         const netRec = await findAirtableRecord(env.NETWORKS_TABLE_NAME, "Network Name", networkName);
         if (!netRec) return jsonResponse({ error: "Network not found." }, 400);
         
@@ -448,16 +455,24 @@ if (url.pathname === "/api/auth/verify-otp" && request.method === "POST") {
         let finalOrgId = organizationName ? await findOrCreate(env.ORGANIZATIONS_TABLE_NAME, "Org Name", organizationName) : null;
         let finalLeaderId = leaderName ? await findOrCreate(env.LEADERS_TABLE_NAME, "Leader Name", leaderName) : null;
 
-        const fields = { "Network": [finalNetworkId], "Request": prayerRequest };
+        const fields = { 
+            "Network": [finalNetworkId], 
+            "Request": prayerRequest,
+            "Status": "Pending", // Web submissions require moderation
+            "Visibility": "Public"
+        };
         if (finalOrgId) fields["Organization"] = [finalOrgId];
         if (finalLeaderId) fields["Leader"] = [finalLeaderId];
 
-        await createRecord(env.IN_PRAYER_REQUESTS_TABLE_NAME, fields);
+        await createRecord(env.PRAYER_REQUESTS_TABLE_NAME, fields);
         return jsonResponse({ status: "Saved" });
       }
 
+      // 5. PERSONAL PRAYER APP ROUTES (LEGACY)
+      
       if (url.pathname === "/submit-prayer" && request.method === "POST") {
         const body = await request.json();
+        // Maps to "Personal Prayer Requests" table via env var
         await createRecord(env.PRAYER_REQUESTS_TABLE, { 
           "Leader": [body.leaderId], 
           "Request Text": body.text, 
@@ -466,18 +481,25 @@ if (url.pathname === "/api/auth/verify-otp" && request.method === "POST") {
         return jsonResponse({ status: "Saved" });
       }
 
+      // Random Prayer Fetcher
       if (url.pathname === "/get-prayer") {
         const filterType = url.searchParams.get('filter') || 'unprayed-today';
         let formula = "AND({Status}='Active')";
-        if (filterType === 'unprayed-today') formula = `AND({Status}='Active', OR({Last Prayed}=BLANK(), DATETIME_DIFF(NOW(), {Last Prayed}, 'days') >= 1))`;
-        else if (filterType === 'unprayed-week') formula = `AND({Status}='Active', OR({Last Prayed}=BLANK(), DATETIME_DIFF(NOW(), {Last Prayed}, 'days') >= 7))`;
-        else if (filterType === 'past-month') formula = `AND({Status}='Active', DATETIME_DIFF(NOW(), CREATED_TIME(), 'days') <= 30)`;
+        
+        if (filterType === 'unprayed-today') {
+            formula = `AND({Status}='Active', OR({Last Prayed}=BLANK(), DATETIME_DIFF(NOW(), {Last Prayed}, 'days') >= 1))`;
+        } else if (filterType === 'unprayed-week') {
+            formula = `AND({Status}='Active', OR({Last Prayed}=BLANK(), DATETIME_DIFF(NOW(), {Last Prayed}, 'days') >= 7))`;
+        } else if (filterType === 'past-month') {
+            formula = `AND({Status}='Active', DATETIME_DIFF(NOW(), CREATED_TIME(), 'days') <= 30)`;
+        }
 
         const endpoint = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(env.PRAYER_REQUESTS_TABLE)}?filterByFormula=${encodeURIComponent(formula)}`;
         const res = await fetch(endpoint, { headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` } });
         const data = await res.json();
         
         if (!data.records || !data.records.length) return jsonResponse({ empty: true });
+        
         const randomRecord = data.records[Math.floor(Math.random() * data.records.length)];
         return jsonResponse({ 
           id: randomRecord.id, 
@@ -489,6 +511,7 @@ if (url.pathname === "/api/auth/verify-otp" && request.method === "POST") {
 
       if (url.pathname === "/log-prayer" && request.method === "POST") {
         const body = await request.json();
+        // Uses legacy "Prayer Logs" table
         await createRecord(env.PRAYER_LOGS_TABLE, { "Prayer Request": [body.prayerRequestId] });
         return jsonResponse({ success: true });
       }
