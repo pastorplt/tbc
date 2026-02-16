@@ -413,118 +413,103 @@ export default {
       }
 
       // 4. ACTIVITY WALL (Robust FIND Formula)
+      // 4. ACTIVITY WALL (Reverse Lookup Strategy)
       if (url.pathname === "/users/me/activity" && request.method === "GET") {
         const userId = getUserIdFromHeader(request);
         if (!userId) return jsonResponse({ error: "Unauthorized" }, 401);
 
-        console.log(`[Activity] Fetching for user: ${userId}`);
-
-        // A. Fetch Submitted Requests
-        // Formula: FIND('recUSERID', {Submitted By}) > 0
-        const requestsPromise = fetchRecords(env.PRAYER_REQUESTS_TABLE_NAME, {
-            formula: `FIND('${userId}', {Submitted By}) > 0`,
-            sort: [{ field: "Created", direction: "desc" }],
-            maxRecords: 100
+        // 1. Fetch the User Record to get linked IDs
+        // We use the ID directly, which is the fastest possible lookup
+        const userRes = await fetch(`https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(env.USERS_TABLE_NAME)}/${userId}`, {
+            headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` }
         });
 
-        // B. Fetch Prayer Activity (Prayed For)
-        // Formula: FIND('recUSERID', {App User}) > 0
-        const activityPromise = fetchRecords(env.PRAYER_ACTIVITY_TABLE_NAME, {
-            formula: `FIND('${userId}', {App User}) > 0`,
-            sort: [{ field: "Created", direction: "desc" }],
-            maxRecords: 100
-        });
+        if (!userRes.ok) {
+            // If user record fails to load, return empty list (or handle error)
+            return jsonResponse({ timeline: [] });
+        }
 
-        const [myRequests, myActivity] = await Promise.all([requestsPromise, activityPromise]);
+        const userData = await userRes.json();
+        // Airtable field names for the links:
+        // You MUST ensure these match your actual column headers in the 'App Users' table
+        const requestIds = userData.fields["Prayer Requests"] || []; // Array of IDs
+        const activityIds = userData.fields["Prayer Activity"] || []; // Array of IDs
 
         const timeline = [];
 
-        // 1. Process "Submitted" Items
-        myRequests.forEach(r => {
-            let subjectType = "General";
-            if (r.fields["Network"]) subjectType = "Network";
-            else if (r.fields["Organization"]) subjectType = "Organization";
-            else if (r.fields["Leader"]) subjectType = "Leader";
-
-            timeline.push({
-                type: "submitted",
-                id: r.id,
-                title: "You asked for prayer",
-                subtitle: r.fields["Request"] || "No text",
-                date: r.createdTime,
-                timestamp: new Date(r.createdTime).getTime(),
-                subjectType: subjectType
-            });
-        });
-
-        // 2. Process "Prayed" Items
-        myActivity.forEach(a => {
-            const f = a.fields;
-            const textSnippet = f["Request Snapshot"] ? f["Request Snapshot"][0] : "Prayer request";
+        // 2. Fetch Submitted Requests (if any exist)
+        if (requestIds.length > 0) {
+            // We grab the last 50 IDs to avoid URL length limits
+            const recentReqIds = requestIds.slice(-50);
+            // Formula: OR(RECORD_ID()='rec1', RECORD_ID()='rec2'...)
+            const formula = "OR(" + recentReqIds.map(id => `RECORD_ID()='${id}'`).join(",") + ")";
             
-            // Resolve Entity Name
-            let entityName = "Prayer Request";
-            let entityType = "Request";
-
-            if (f["Network"] && f["Network"].length > 0) {
-                entityName = f["Network"][0]; entityType = "Network";
-            } else if (f["Organization"] && f["Organization"].length > 0) {
-                entityName = f["Organization"][0]; entityType = "Organization";
-            } else if (f["Leader"] && f["Leader"].length > 0) {
-                entityName = f["Leader"][0]; entityType = "Leader";
-            }
-
-            timeline.push({
-                type: "prayed",
-                id: a.id,
-                requestId: f["Request"] ? f["Request"][0] : null,
-                title: `You prayed for ${entityName}`,
-                subtitle: textSnippet,
-                date: a.createdTime,
-                timestamp: new Date(a.createdTime).getTime(),
-                entityType: entityType
+            const myRequests = await fetchRecords(env.PRAYER_REQUESTS_TABLE_NAME, {
+                formula: formula,
+                sort: [{ field: "Created", direction: "desc" }]
             });
-        });
 
-        // Sort combined list by time descending (Newest first)
+            myRequests.forEach(r => {
+                let subjectType = "General";
+                if (r.fields["Network"]) subjectType = "Network";
+                else if (r.fields["Organization"]) subjectType = "Organization";
+                else if (r.fields["Leader"]) subjectType = "Leader";
+
+                timeline.push({
+                    type: "submitted",
+                    id: r.id,
+                    title: "You asked for prayer",
+                    subtitle: r.fields["Request"] || "No text",
+                    date: r.createdTime,
+                    timestamp: new Date(r.createdTime).getTime(),
+                    subjectType: subjectType
+                });
+            });
+        }
+
+        // 3. Fetch Prayer Activity (if any exist)
+        if (activityIds.length > 0) {
+            const recentActIds = activityIds.slice(-50);
+            const formula = "OR(" + recentActIds.map(id => `RECORD_ID()='${id}'`).join(",") + ")";
+            
+            const myActivity = await fetchRecords(env.PRAYER_ACTIVITY_TABLE_NAME, {
+                formula: formula,
+                sort: [{ field: "Created", direction: "desc" }]
+            });
+
+            myActivity.forEach(a => {
+                const f = a.fields;
+                // Use the Lookups if they exist, or fallback to generic text
+                const textSnippet = f["Request Snapshot"] ? f["Request Snapshot"][0] : "Prayer request";
+                
+                let entityName = "Prayer Request";
+                let entityType = "Request";
+
+                if (f["Network"] && f["Network"].length > 0) {
+                    entityName = f["Network"][0]; entityType = "Network";
+                } else if (f["Organization"] && f["Organization"].length > 0) {
+                    entityName = f["Organization"][0]; entityType = "Organization";
+                } else if (f["Leader"] && f["Leader"].length > 0) {
+                    entityName = f["Leader"][0]; entityType = "Leader";
+                }
+
+                timeline.push({
+                    type: "prayed",
+                    id: a.id,
+                    requestId: f["Request"] ? f["Request"][0] : null,
+                    title: `You prayed for ${entityName}`,
+                    subtitle: textSnippet,
+                    date: a.createdTime,
+                    timestamp: new Date(a.createdTime).getTime(),
+                    entityType: entityType
+                });
+            });
+        }
+
+        // 4. Sort Combined Timeline
         timeline.sort((a, b) => b.timestamp - a.timestamp);
 
         return jsonResponse({ timeline });
-      }
-      
-      // 3.5 PUBLIC PRAYER REQUESTS (Dynamic Fetch for Maps)
-      // GET /public/requests?networkId=... (or organizationId, leaderId)
-      if (url.pathname === "/public/requests" && request.method === "GET") {
-        const networkId = url.searchParams.get("networkId");
-        const orgId = url.searchParams.get("organizationId") || url.searchParams.get("orgId");
-        const leaderId = url.searchParams.get("leaderId");
-
-        // 1. Fetch all ACTIVE + PUBLIC requests
-        // We fetch the recent active list and filter in memory to ensure we match the Linked Record ID correctly
-        const activeRequests = await fetchRecords(env.PRAYER_REQUESTS_TABLE_NAME, {
-          formula: "AND({Status}='Active', {Visibility}='Public')",
-          sort: [{ field: "Created", direction: "desc" }],
-          maxRecords: 100 
-        });
-
-        // 2. Filter for the specific target
-        const matches = activeRequests.filter(r => {
-           const f = r.fields;
-           // Check if the target ID exists in the linked array
-           if (networkId && f["Network"] && f["Network"].includes(networkId)) return true;
-           if (orgId && f["Organization"] && f["Organization"].includes(orgId)) return true;
-           if (leaderId && f["Leader"] && f["Leader"].includes(leaderId)) return true;
-           return false;
-        });
-
-        // 3. Return simplified response
-        return jsonResponse({
-          requests: matches.map(r => ({
-              id: r.id,
-              text: r.fields["Request"],
-              created: r.createdTime
-          }))
-        });
       }
 
       // 3.5 LOG ENTITY PRAYER (The "Standing Request" Pattern)
