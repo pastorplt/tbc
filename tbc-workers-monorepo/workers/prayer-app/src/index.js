@@ -431,10 +431,20 @@ export default {
 
         const userData = await userRes.json();
         
-        // --- DEBUGGING START ---
-        console.log("FULL USER RECORD:", JSON.stringify(userData));
-        console.log("Prayer Activity Field Raw:", JSON.stringify(userData.fields["Prayer Activity"]));
-        // --- DEBUGGING END ---
+        const userData = await userRes.json();
+        
+        // --- DEBUG MODE: Return raw fields to the client ---
+        // If "Prayer Activity" is missing here, we know the API isn't seeing it.
+        if (url.searchParams.get("debug") === "true") {
+            return jsonResponse({
+                debug_mode: true,
+                all_fields_found: Object.keys(userData.fields),
+                raw_activity_field: userData.fields["Prayer Activity"],
+                raw_request_field: userData.fields["Prayer Requests"],
+                full_record: userData
+            });
+        }
+        // --------------------------------------------------
 
         const requestIds = userData.fields["Prayer Requests"] || []; 
         const activityIds = userData.fields["Prayer Activity"] || [];
