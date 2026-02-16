@@ -108,6 +108,7 @@ export default {
         const startCursor = payload.cursor != null ? payload.cursor : state.cursor;
 
         // Fetch chunk from Airtable
+        // NOTE: "Latest Prayer Request" removed from fields array
         const { records, nextCursor, pagesUsed } = await fetchAirtableChunk(env, tableName, [
           fieldLat, fieldLon,
           "Org Name",
@@ -118,7 +119,6 @@ export default {
           "Address",
           "County",
           "Network Name",
-          "Latest Prayer Request",
           "Org Logo",
           "Logo Background"
         ], { offset: startCursor || undefined, maxPages: MAX_PAGES });
@@ -377,13 +377,13 @@ function recordsToFeatures(records, { fieldLat, fieldLon, origin }) {
       organization_name: normalizeValue(f["Org Name"]),
       website:           normalizeValue(f["Website"]),
       category:          normalizeValue(f["Category"]),
-      // CHANGED: Use cleanDenomination instead of normalizeValue
+      // Use cleanDenomination to strip parenthetical text
       denomination:      cleanDenomination(f["Denomination"]),
       organization_type: normalizeValue(f["Org Type"]),
       full_address:      normalizeValue(f["Address"]),
       county:            normalizeValue(f["County"]),
       network_name:      normalizeValue(f["Network Name"]),
-      prayer_request:    normalizeValue(f["Latest Prayer Request"]),
+      // REMOVED: prayer_request mapping
       logo_background:   normalizeValue(f["Logo Background"])
     };
 
@@ -402,7 +402,7 @@ function recordsToFeatures(records, { fieldLat, fieldLon, origin }) {
 
 /* ---------------- Utils ---------------- */
 
-// NEW: Helper to strip parenthetical text from denomination
+// Helper to strip parenthetical text from denomination
 function cleanDenomination(v) {
   const s = normalizeValue(v);
   // Removes " (Any Text)" including the parentheses
