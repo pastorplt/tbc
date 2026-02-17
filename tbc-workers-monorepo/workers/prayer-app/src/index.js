@@ -410,7 +410,7 @@ export default {
         return jsonResponse({ success: true });
       }
 
-     // 4. ACTIVITY WALL (Restored & Human-Readable Logic)
+     // 4. ACTIVITY WALL (Fixed Sort & Name Extraction)
       if (url.pathname === "/users/me/activity" && request.method === "GET") {
         const userId = getUserIdFromHeader(request);
         if (!userId) return jsonResponse({ error: "Unauthorized" }, 401);
@@ -426,19 +426,20 @@ export default {
         const activityIds = userData.fields["Prayer Activity"] || [];
         const timeline = [];
 
-        // 2. Fetch both tables in parallel using existing Record IDs
+        // 2. Fetch both tables in parallel
+        // NOTE: We sort by 'Timestamp' for Activity as per your schema
         const [myRequests, myActivity] = await Promise.all([
             requestIds.length > 0 ? fetchRecords(env.PRAYER_REQUESTS_TABLE_NAME, {
-                formula: "OR(" + requestIds.slice(-50).map(id => `RECORD_ID()='${id}'`).join(",") + ")",
-                sort: [{ field: "Created", direction: "desc" }]
+                formula: "OR(" + requestIds.slice(-50).map(id => `RECORD_ID()='${id}'`).join(",") + ")"
+                // Removed API-side sort to prevent crashes if field names differ
             }) : Promise.resolve([]),
             activityIds.length > 0 ? fetchRecords(env.PRAYER_ACTIVITY_TABLE_NAME, {
-                formula: "OR(" + activityIds.slice(-50).map(id => `RECORD_ID()='${id}'`).join(",") + ")",
-                sort: [{ field: "Created", direction: "desc" }]
+                formula: "OR(" + activityIds.slice(-50).map(id => `RECORD_ID()='${id}'`).join(",") + ")"
+                // Removed API-side sort to prevent crashes if field names differ
             }) : Promise.resolve([])
         ]);
 
-        // 3. Map Submitted Items
+        // 3. Process Submitted Items
         myRequests.forEach(r => {
             timeline.push({
                 type: "submitted",
@@ -450,11 +451,11 @@ export default {
             });
         });
 
-        // 4. Map Prayed Items with Name Resolution from Lookups
+        // 4. Process Prayed Items (Handling lookup arrays)
         myActivity.forEach(a => {
             const f = a.fields;
             
-            // Extract strings from the lookup arrays provided by your Airtable schema
+            // Extract strings from multipleLookupValues arrays
             const netName = (f["Network"] && f["Network"].length > 0) ? f["Network"][0] : null;
             const orgName = (f["Organization"] && f["Organization"].length > 0) ? f["Organization"][0] : null;
             const leadName = (f["Leader"] && f["Leader"].length > 0) ? f["Leader"][0] : null;
@@ -462,7 +463,7 @@ export default {
             const entityName = netName || orgName || leadName;
             const textSnippet = (f["Request Snapshot"] && f["Request Snapshot"].length > 0) ? f["Request Snapshot"][0] : "Joined in prayer";
 
-            // If the name is found and is a valid string that doesn't start with "rec"
+            // Determine Title: Use Name if it's a real string, otherwise generic fallback
             let displayTitle = "You joined in prayer";
             if (entityName && typeof entityName === 'string' && !entityName.startsWith("rec")) {
                 displayTitle = `You prayed for ${entityName}`;
@@ -478,7 +479,7 @@ export default {
             });
         });
 
-        // 5. Final Sort by Newest First
+        // 5. Unified Sort (Newest First)
         timeline.sort((a, b) => b.timestamp - a.timestamp);
         return jsonResponse({ timeline });
       }
