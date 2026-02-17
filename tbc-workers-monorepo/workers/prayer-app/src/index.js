@@ -410,11 +410,12 @@ export default {
         return jsonResponse({ success: true });
       }
 
-      // 4. ACTIVITY WALL (Human-Readable Name Resolver)
+     // 4. ACTIVITY WALL (Simple & Reliable)
       if (url.pathname === "/users/me/activity" && request.method === "GET") {
         const userId = getUserIdFromHeader(request);
         if (!userId) return jsonResponse({ error: "Unauthorized" }, 401);
 
+        // 1. Fetch the User Record
         const userRes = await fetch(`https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(env.USERS_TABLE_NAME)}/${userId}`, {
             headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` }
         });
@@ -425,7 +426,7 @@ export default {
         const activityIds = userData.fields["Prayer Activity"] || [];
         const timeline = [];
 
-        // 1. Fetch Requests & Activity in parallel
+        // 2. Fetch Requests & Activity in parallel
         const [myRequests, myActivity] = await Promise.all([
             requestIds.length > 0 ? fetchRecords(env.PRAYER_REQUESTS_TABLE_NAME, {
                 formula: "OR(" + requestIds.slice(-50).map(id => `RECORD_ID()='${id}'`).join(",") + ")",
@@ -437,29 +438,7 @@ export default {
             }) : Promise.resolve([])
         ]);
 
-        // 2. Identify all Entity IDs that need name resolution
-        const entityIdsToFetch = new Set();
-        myActivity.forEach(a => {
-            if (a.fields["Network"]?.[0]) entityIdsToFetch.add({id: a.fields["Network"][0], table: env.NETWORKS_TABLE_NAME, field: "Network Name"});
-            if (a.fields["Organization"]?.[0]) entityIdsToFetch.add({id: a.fields["Organization"][0], table: env.ORGANIZATIONS_TABLE_NAME, field: "Org Name"});
-            if (a.fields["Leader"]?.[0]) entityIdsToFetch.add({id: a.fields["Leader"][0], table: env.LEADERS_TABLE_NAME, field: "Leader Name"});
-        });
-
-        // 3. Resolve Names (Cache them in a Map)
-        const nameMap = new Map();
-        await Promise.all(Array.from(entityIdsToFetch).map(async (item) => {
-            try {
-                const res = await fetch(`https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(item.table)}/${item.id}`, {
-                    headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` }
-                });
-                if (res.ok) {
-                    const data = await res.json();
-                    nameMap.set(item.id, data.fields[item.field]);
-                }
-            } catch (e) { console.error("Name resolution failed", e); }
-        }));
-
-        // 4. Build Timeline with Names
+        // 3. Process Submitted Items
         myRequests.forEach(r => {
             timeline.push({
                 type: "submitted",
@@ -471,19 +450,26 @@ export default {
             });
         });
 
+        // 4. Process Prayed Items (Pulling Names from your Lookups)
         myActivity.forEach(a => {
             const f = a.fields;
-            const netId = f["Network"]?.[0];
-            const orgId = f["Organization"]?.[0];
-            const leadId = f["Leader"]?.[0];
             
-            const entityName = nameMap.get(netId) || nameMap.get(orgId) || nameMap.get(leadId) || "a request";
-            const textSnippet = f["Request Snapshot"]?.[0] || "Joined in prayer";
+            // Lookups are arrays. We take the first item.
+            // We check Network, then Organization, then Leader.
+            let name = "a request";
+            if (f["Network"] && f["Network"].length > 0) name = f["Network"][0];
+            else if (f["Organization"] && f["Organization"].length > 0) name = f["Organization"][0];
+            else if (f["Leader"] && f["Leader"].length > 0) name = f["Leader"][0];
+
+            // If the name is STILL a record ID (starts with rec), 
+            // it means the Airtable lookup is pointing to the wrong column.
+            const displayTitle = name.startsWith("rec") ? "You joined in prayer" : `You prayed for ${name}`;
+            const textSnippet = f["Request Snapshot"] ? f["Request Snapshot"][0] : "Joined in prayer";
 
             timeline.push({
                 type: "prayed",
                 id: a.id,
-                title: `You prayed for ${entityName}`,
+                title: displayTitle,
                 subtitle: textSnippet,
                 date: a.createdTime,
                 timestamp: new Date(a.createdTime).getTime()
