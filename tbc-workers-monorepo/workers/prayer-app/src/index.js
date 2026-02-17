@@ -468,35 +468,44 @@ export default {
             });
         }
 
-        // 3. Fetch Prayer Activity
+        // 3. Fetch Prayer Activity (Fixed Fetch)
         if (activityIds.length > 0) {
             const recentActIds = activityIds.slice(-50);
             const formula = "OR(" + recentActIds.map(id => `RECORD_ID()='${id}'`).join(",") + ")";
+            
+            // We'll fetch without restricted fields first to ensure we get the records
             const myActivity = await fetchRecords(env.PRAYER_ACTIVITY_TABLE_NAME, {
-                formula: formula,
-                sort: [{ field: "Created", direction: "desc" }]
+                formula: formula
             });
 
             myActivity.forEach(a => {
                 const f = a.fields;
-                const textSnippet = f["Request Snapshot"] ? f["Request Snapshot"][0] : "Prayer request";
                 
-                let entityName = "Prayer Request";
+                // Lookup fields return arrays; we handle that safely here
+                const textSnippet = (f["Request Snapshot"] && f["Request Snapshot"].length > 0) 
+                    ? f["Request Snapshot"][0] 
+                    : "Joined in prayer";
+                
+                let entityName = "";
                 let entityType = "Request";
 
+                // Check your lookups
                 if (f["Network"] && f["Network"].length > 0) {
-                    entityName = f["Network"][0]; entityType = "Network";
+                    entityName = f["Network"][0];
+                    entityType = "Network";
                 } else if (f["Organization"] && f["Organization"].length > 0) {
-                    entityName = f["Organization"][0]; entityType = "Organization";
+                    entityName = f["Organization"][0];
+                    entityType = "Organization";
                 } else if (f["Leader"] && f["Leader"].length > 0) {
-                    entityName = f["Leader"][0]; entityType = "Leader";
+                    entityName = f["Leader"][0];
+                    entityType = "Leader";
                 }
 
                 timeline.push({
                     type: "prayed",
                     id: a.id,
                     requestId: f["Request"] ? f["Request"][0] : null,
-                    title: `You prayed for ${entityName}`,
+                    title: entityName ? `You prayed for ${entityName}` : "You joined in prayer",
                     subtitle: textSnippet,
                     date: a.createdTime,
                     timestamp: new Date(a.createdTime).getTime(),
