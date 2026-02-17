@@ -410,7 +410,7 @@ export default {
         return jsonResponse({ success: true });
       }
 
-     // 4. ACTIVITY WALL (Simple & Reliable)
+     // 4. ACTIVITY WALL (Restored & Human-Readable Logic)
       if (url.pathname === "/users/me/activity" && request.method === "GET") {
         const userId = getUserIdFromHeader(request);
         if (!userId) return jsonResponse({ error: "Unauthorized" }, 401);
@@ -426,7 +426,7 @@ export default {
         const activityIds = userData.fields["Prayer Activity"] || [];
         const timeline = [];
 
-        // 2. Fetch Requests & Activity in parallel
+        // 2. Fetch both tables in parallel using existing Record IDs
         const [myRequests, myActivity] = await Promise.all([
             requestIds.length > 0 ? fetchRecords(env.PRAYER_REQUESTS_TABLE_NAME, {
                 formula: "OR(" + requestIds.slice(-50).map(id => `RECORD_ID()='${id}'`).join(",") + ")",
@@ -438,7 +438,7 @@ export default {
             }) : Promise.resolve([])
         ]);
 
-        // 3. Process Submitted Items
+        // 3. Map Submitted Items
         myRequests.forEach(r => {
             timeline.push({
                 type: "submitted",
@@ -450,21 +450,23 @@ export default {
             });
         });
 
-        // 4. Process Prayed Items (Pulling Names from your Lookups)
+        // 4. Map Prayed Items with Name Resolution from Lookups
         myActivity.forEach(a => {
             const f = a.fields;
             
-            // Lookups are arrays. We take the first item.
-            // We check Network, then Organization, then Leader.
-            let name = "a request";
-            if (f["Network"] && f["Network"].length > 0) name = f["Network"][0];
-            else if (f["Organization"] && f["Organization"].length > 0) name = f["Organization"][0];
-            else if (f["Leader"] && f["Leader"].length > 0) name = f["Leader"][0];
+            // Extract strings from the lookup arrays provided by your Airtable schema
+            const netName = (f["Network"] && f["Network"].length > 0) ? f["Network"][0] : null;
+            const orgName = (f["Organization"] && f["Organization"].length > 0) ? f["Organization"][0] : null;
+            const leadName = (f["Leader"] && f["Leader"].length > 0) ? f["Leader"][0] : null;
+            
+            const entityName = netName || orgName || leadName;
+            const textSnippet = (f["Request Snapshot"] && f["Request Snapshot"].length > 0) ? f["Request Snapshot"][0] : "Joined in prayer";
 
-            // If the name is STILL a record ID (starts with rec), 
-            // it means the Airtable lookup is pointing to the wrong column.
-            const displayTitle = name.startsWith("rec") ? "You joined in prayer" : `You prayed for ${name}`;
-            const textSnippet = f["Request Snapshot"] ? f["Request Snapshot"][0] : "Joined in prayer";
+            // If the name is found and is a valid string that doesn't start with "rec"
+            let displayTitle = "You joined in prayer";
+            if (entityName && typeof entityName === 'string' && !entityName.startsWith("rec")) {
+                displayTitle = `You prayed for ${entityName}`;
+            }
 
             timeline.push({
                 type: "prayed",
@@ -476,6 +478,7 @@ export default {
             });
         });
 
+        // 5. Final Sort by Newest First
         timeline.sort((a, b) => b.timestamp - a.timestamp);
         return jsonResponse({ timeline });
       }
