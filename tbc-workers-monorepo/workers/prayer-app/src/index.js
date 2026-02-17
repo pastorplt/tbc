@@ -574,16 +574,18 @@ export default {
       
       // 4. LEGACY / HYBRID SUBMISSION ROUTES
 
-      // APP SUBMIT PRAYER
+     // APP SUBMIT PRAYER (Auto-Active for Logged In Users)
       if (url.pathname === "/app-submit-prayer" && request.method === "POST") {
         const body = await request.json();
         const { networkId, church, leader, request: reqText, userId } = body;
         
+        // 1. Extract Auth User ID reliably from Header
         let authUserId = userId; 
         const authHeader = request.headers.get("Authorization");
         if (authHeader) {
              const token = authHeader.replace(/^Bearer\s+/i, "");
              const parts = token.split("_");
+             // Token format: session_recID_timestamp
              if (parts.length >= 2 && parts[0] === "session" && parts[1].startsWith("rec")) {
                 authUserId = parts[1];
              }
@@ -593,6 +595,7 @@ export default {
 
         if (!reqText) return jsonResponse({ error: "Missing request text" }, 400);
 
+        // Validation: At least one target is required
         const hasNetwork = !!networkId;
         const hasChurch  = church && (church.id || church.isNew);
         const hasLeader  = leader && (leader.id || leader.isNew);
@@ -601,6 +604,7 @@ export default {
              return jsonResponse({ error: "Must target at least one: Network, Church, or Leader" }, 400);
         }
 
+        // Handle Church Logic (Create if New)
         let finalChurchId = null;
         if (church) {
             if (church.isNew && church.name) {
@@ -616,6 +620,7 @@ export default {
             }
         }
 
+        // Handle Leader Logic (Create if New)
         let finalLeaderId = null;
         if (leader) {
             if (leader.isNew && leader.name) {
@@ -631,16 +636,26 @@ export default {
             }
         }
 
+        // --- DETERMINE STATUS ---
+        // If authenticated via Bearer token, auto-approve as "Active"
+        // Otherwise, default to "Pending"
+        const initialStatus = authUserId ? "Active" : "Pending";
+
+        // Build Record Fields
         const fields = {
             "Request": reqText,
-            "Status": "Pending",
+            "Status": initialStatus,
             "Visibility": "Public"
         };
 
         if (networkId) fields["Network"] = [networkId];
         if (finalChurchId) fields["Organization"] = [finalChurchId];
         if (finalLeaderId) fields["Leader"] = [finalLeaderId];
-        if (authUserId) fields["Submitted By"] = [authUserId];
+        
+        // Explicitly set Submitted By if authenticated
+        if (authUserId) {
+            fields["Submitted By"] = [authUserId];
+        }
 
         const targetTable = env.PRAYER_REQUESTS_TABLE_NAME || "Prayer Requests";
         const result = await createRecord(targetTable, fields);
@@ -648,6 +663,7 @@ export default {
         return jsonResponse({ 
             success: true, 
             id: result.id,
+            status: initialStatus,
             debug_user: authUserId 
         });
       }
