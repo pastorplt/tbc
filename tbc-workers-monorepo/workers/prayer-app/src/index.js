@@ -180,9 +180,9 @@ export default {
     // -------------------------------------------------------------------------
 
     try {
-      // 0. UTILITY ROUTES (Restored)
+      // 0. UTILITY ROUTES
       if (url.pathname === "/health" || url.pathname === "/") {
-        return jsonResponse({ status: "ok", version: "2.0.0" });
+        return jsonResponse({ status: "ok", version: "2.1.0" });
       }
 
       if (url.pathname === "/api/sample/") {
@@ -200,7 +200,6 @@ export default {
         let appUser = await findRecordByPhone(env.USERS_TABLE_NAME, cleanPhone);
         if (appUser) {
            if (appUser.fields["App Approved"] === true) {
-             // Logic: Send OTP via Twilio/etc (omitted for dev)
              return jsonResponse({ status: "otp_sent", message: "Code sent." });
            }
            return jsonResponse({ status: "pending", message: "Account under review." });
@@ -226,7 +225,7 @@ export default {
         const { name, phone, networkId, orgId, reason } = await request.json();
         const normalizedPhone = normalizePhone(phone);
 
-        // Create Leader record first (Potentially temporary)
+        // Create Leader record first
         const leaderFields = {
           "Leader Name": name,
           "Phone": normalizedPhone,
@@ -239,6 +238,7 @@ export default {
 
         // Create App User
         await createRecord(env.USERS_TABLE_NAME, {
+          "Name": name, // Ensure Name is populated
           "Phone": normalizedPhone,
           "App Approved": false,
           "Linked Leader": [newLeader.id],
@@ -251,7 +251,7 @@ export default {
         return jsonResponse({ status: "created_pending", message: "Registration submitted." });
       }
 
-      // 3. AUTH ROUTES (Verify OTP - RESTORED PROFILE DATA)
+      // Verify OTP
       if (url.pathname === "/api/auth/verify-otp" && request.method === "POST") {
         const { phone, code } = await request.json();
         const normalizedPhone = normalizePhone(phone);
@@ -266,7 +266,7 @@ export default {
             }
         }
 
-        // DEV BACKDOOR (Keep for testing)
+        // DEV BACKDOOR
         if (!isValid && code === "123456") isValid = true;
 
         if (!isValid) return jsonResponse({ error: "Invalid code" }, 401);
@@ -277,7 +277,7 @@ export default {
 
         const token = `session_${userRec.id}_${Date.now()}`; 
 
-        // 1. Initialize Profile with ID & Phone
+        // 1. Initialize Profile
         const userProfile = {
             id: userRec.id,
             phone: normalizedPhone,
@@ -286,10 +286,9 @@ export default {
             organizationId: userRec.fields["Linked Organization"]?.[0]
         };
 
-        // 2. Fetch Leader Details (Name, Email)
+        // 2. Fetch Leader Details
         if (userProfile.leaderId) {
             try {
-                // We use direct ID fetch for speed
                 const leaderRes = await fetch(`https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(env.LEADERS_TABLE_NAME)}/${userProfile.leaderId}`, {
                     headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` }
                 });
@@ -298,7 +297,6 @@ export default {
                     userProfile.name = leaderData.fields["Leader Name"];
                     userProfile.email = leaderData.fields["Email"];
                     
-                    // Fallback: If User table didn't have links, grab them from Leader
                     if (!userProfile.networkId && leaderData.fields["Network Membership"]?.[0]) {
                         userProfile.networkId = leaderData.fields["Network Membership"][0];
                     }
@@ -322,7 +320,7 @@ export default {
             } catch (e) { console.log("Network fetch failed", e); }
         }
 
-        // 4. Fetch Organization (Church) Name
+        // 4. Fetch Organization Name
         if (userProfile.organizationId) {
             try {
                 const orgRes = await fetch(`https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(env.ORGANIZATIONS_TABLE_NAME)}/${userProfile.organizationId}`, {
@@ -337,7 +335,8 @@ export default {
 
         return jsonResponse({ token, user: userProfile });
       }
-      // DEV: Manually Approve User (Restored)
+
+      // DEV: Manually Approve User
       if (url.pathname === "/api/auth/dev/approve" && request.method === "POST") {
         const { phone } = await request.json();
         const clean = normalizePhone(phone);
@@ -349,7 +348,7 @@ export default {
         return jsonResponse({ success: true, message: `User ${clean} approved.` });
       }
 
-      // 2. DATA LIST ROUTES (Cached/Static-like)
+      // 2. DATA LIST ROUTES
       if (url.pathname === "/get-leaders") {
         const leaders = await fetchAllRecords(env.LEADERS_TABLE_NAME, "Leader Name");
         return jsonResponse(leaders);
@@ -365,7 +364,7 @@ export default {
         return jsonResponse(orgs);
       }
 
-      // 3. COMMUNITY PRAYER ROUTES (NEW ARCHITECTURE)
+      // 3. COMMUNITY PRAYER ROUTES
 
       // Submit Prayer Request (Authenticated)
       if (url.pathname === "/prayers" && request.method === "POST") {
@@ -394,7 +393,6 @@ export default {
       }
 
       // Log Prayer Activity (Authenticated)
-      // Route: /prayers/:id/pray
       if (url.pathname.match(/^\/prayers\/rec[\w]+\/pray$/) && request.method === "POST") {
         const userId = getUserIdFromHeader(request);
         if (!userId) return jsonResponse({ error: "Unauthorized" }, 401);
@@ -412,29 +410,21 @@ export default {
         return jsonResponse({ success: true });
       }
 
-      // 4. ACTIVITY WALL (Robust FIND Formula)
       // 4. ACTIVITY WALL (Reverse Lookup Strategy)
       if (url.pathname === "/users/me/activity" && request.method === "GET") {
         const userId = getUserIdFromHeader(request);
         if (!userId) return jsonResponse({ error: "Unauthorized" }, 401);
 
-        // 1. Fetch the User Record to get linked IDs
-        // We use the ID directly, which is the fastest possible lookup
+        // 1. Fetch the User Record
         const userRes = await fetch(`https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(env.USERS_TABLE_NAME)}/${userId}`, {
             headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` }
         });
 
-        if (!userRes.ok) {
-            // If user record fails to load, return empty list (or handle error)
-            return jsonResponse({ timeline: [] });
-        }
+        if (!userRes.ok) return jsonResponse({ timeline: [] });
 
         const userData = await userRes.json();
         
-        const userData = await userRes.json();
-        
-        // --- DEBUG MODE: Return raw fields to the client ---
-        // If "Prayer Activity" is missing here, we know the API isn't seeing it.
+        // --- DEBUG MODE (Optional) ---
         if (url.searchParams.get("debug") === "true") {
             return jsonResponse({
                 debug_mode: true,
@@ -444,20 +434,17 @@ export default {
                 full_record: userData
             });
         }
-        // --------------------------------------------------
+        // -----------------------------
 
         const requestIds = userData.fields["Prayer Requests"] || []; 
         const activityIds = userData.fields["Prayer Activity"] || [];
 
         const timeline = [];
 
-        // 2. Fetch Submitted Requests (if any exist)
+        // 2. Fetch Submitted Requests
         if (requestIds.length > 0) {
-            // We grab the last 50 IDs to avoid URL length limits
             const recentReqIds = requestIds.slice(-50);
-            // Formula: OR(RECORD_ID()='rec1', RECORD_ID()='rec2'...)
             const formula = "OR(" + recentReqIds.map(id => `RECORD_ID()='${id}'`).join(",") + ")";
-            
             const myRequests = await fetchRecords(env.PRAYER_REQUESTS_TABLE_NAME, {
                 formula: formula,
                 sort: [{ field: "Created", direction: "desc" }]
@@ -481,11 +468,10 @@ export default {
             });
         }
 
-        // 3. Fetch Prayer Activity (if any exist)
+        // 3. Fetch Prayer Activity
         if (activityIds.length > 0) {
             const recentActIds = activityIds.slice(-50);
             const formula = "OR(" + recentActIds.map(id => `RECORD_ID()='${id}'`).join(",") + ")";
-            
             const myActivity = await fetchRecords(env.PRAYER_ACTIVITY_TABLE_NAME, {
                 formula: formula,
                 sort: [{ field: "Created", direction: "desc" }]
@@ -493,7 +479,6 @@ export default {
 
             myActivity.forEach(a => {
                 const f = a.fields;
-                // Use the Lookups if they exist, or fallback to generic text
                 const textSnippet = f["Request Snapshot"] ? f["Request Snapshot"][0] : "Prayer request";
                 
                 let entityName = "Prayer Request";
@@ -520,15 +505,40 @@ export default {
             });
         }
 
-        // 4. Sort Combined Timeline
         timeline.sort((a, b) => b.timestamp - a.timestamp);
-
         return jsonResponse({ timeline });
       }
 
-      // 3.5 LOG ENTITY PRAYER (The "Standing Request" Pattern)
-      // POST /prayers/log-entity
-      // Body: { networkId, organizationId, leaderId }
+      // 3.5 PUBLIC PRAYER REQUESTS (Map Popups)
+      if (url.pathname === "/public/requests" && request.method === "GET") {
+        const networkId = url.searchParams.get("networkId");
+        const orgId = url.searchParams.get("organizationId") || url.searchParams.get("orgId");
+        const leaderId = url.searchParams.get("leaderId");
+
+        const activeRequests = await fetchRecords(env.PRAYER_REQUESTS_TABLE_NAME, {
+          formula: "AND({Status}='Active', {Visibility}='Public')",
+          sort: [{ field: "Created", direction: "desc" }],
+          maxRecords: 100 
+        });
+
+        const matches = activeRequests.filter(r => {
+           const f = r.fields;
+           if (networkId && f["Network"] && f["Network"].includes(networkId)) return true;
+           if (orgId && f["Organization"] && f["Organization"].includes(orgId)) return true;
+           if (leaderId && f["Leader"] && f["Leader"].includes(leaderId)) return true;
+           return false;
+        });
+
+        return jsonResponse({
+          requests: matches.map(r => ({
+              id: r.id,
+              text: r.fields["Request"],
+              created: r.createdTime
+          }))
+        });
+      }
+
+      // 3.5 LOG ENTITY PRAYER ("Standing Request")
       if (url.pathname === "/prayers/log-entity" && request.method === "POST") {
         const userId = getUserIdFromHeader(request);
         if (!userId) return jsonResponse({ error: "Unauthorized" }, 401);
@@ -540,7 +550,6 @@ export default {
              return jsonResponse({ error: "Target ID required" }, 400);
         }
 
-        // 1. Determine Target Table & Field
         let targetTable, targetField, targetId, nameField;
         if (networkId) { 
             targetTable = env.NETWORKS_TABLE_NAME; targetField = "Network"; targetId = networkId; nameField = "Network Name";
@@ -552,8 +561,6 @@ export default {
 
         const REQUESTS_TABLE = env.PRAYER_REQUESTS_TABLE_NAME || "Prayer Requests";
 
-        // 2. Find Existing "Standing" Request
-        // Formula: AND({LinkedField}='ID', {Type}='Standing')
         const existing = await fetchRecords(REQUESTS_TABLE, {
             formula: `AND({${targetField}}='${targetId}', {Type}='Standing')`,
             maxRecords: 1
@@ -564,16 +571,12 @@ export default {
         if (existing.length > 0) {
             requestId = existing[0].id;
         } else {
-            // 3. Fetch Entity Name (for the request text)
-            const entity = await findAirtableRecord(targetTable, "RECORD_ID()", targetId); // Helper needed or just fetch
-            // Alternatively, just fetch the specific record directly:
             const entRes = await fetch(`https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${targetTable}/${targetId}`, {
                  headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` }
             });
             const entData = await entRes.json();
             const entityName = entData.fields?.[nameField] || "Unspecified";
 
-            // 4. Create Standing Request
             const newReq = await createRecord(REQUESTS_TABLE, {
                 [targetField]: [targetId],
                 "Request": `Prayer for ${entityName}`,
@@ -584,7 +587,6 @@ export default {
             requestId = newReq.id;
         }
 
-        // 5. Log Activity
         await createRecord(env.PRAYER_ACTIVITY_TABLE_NAME, {
             "App User": [userId],
             "Request": [requestId],
@@ -597,28 +599,25 @@ export default {
       
       // 4. LEGACY / HYBRID SUBMISSION ROUTES
 
-     // 2. APP SUBMIT PRAYER (Fixed "Submitted By" Logic)
+      // APP SUBMIT PRAYER
       if (url.pathname === "/app-submit-prayer" && request.method === "POST") {
         const body = await request.json();
         const { networkId, church, leader, request: reqText, userId } = body;
         
-        // 1. Extract Auth User ID reliably
-        let authUserId = userId; // Allow passing in body for testing
+        let authUserId = userId; 
         const authHeader = request.headers.get("Authorization");
         if (authHeader) {
              const token = authHeader.replace(/^Bearer\s+/i, "");
              const parts = token.split("_");
-             // Token format: session_recID_timestamp
              if (parts.length >= 2 && parts[0] === "session" && parts[1].startsWith("rec")) {
                 authUserId = parts[1];
              }
         }
         
-        console.log(`[Submit] User ID detected: ${authUserId}`); // <--- DEBUG LOG
+        console.log(`[Submit] User ID detected: ${authUserId}`);
 
         if (!reqText) return jsonResponse({ error: "Missing request text" }, 400);
 
-        // Validation: At least one target is required
         const hasNetwork = !!networkId;
         const hasChurch  = church && (church.id || church.isNew);
         const hasLeader  = leader && (leader.id || leader.isNew);
@@ -627,7 +626,6 @@ export default {
              return jsonResponse({ error: "Must target at least one: Network, Church, or Leader" }, 400);
         }
 
-        // Handle Church Logic (Create if New)
         let finalChurchId = null;
         if (church) {
             if (church.isNew && church.name) {
@@ -643,7 +641,6 @@ export default {
             }
         }
 
-        // Handle Leader Logic (Create if New)
         let finalLeaderId = null;
         if (leader) {
             if (leader.isNew && leader.name) {
@@ -659,7 +656,6 @@ export default {
             }
         }
 
-        // Build Record Fields
         const fields = {
             "Request": reqText,
             "Status": "Pending",
@@ -669,11 +665,7 @@ export default {
         if (networkId) fields["Network"] = [networkId];
         if (finalChurchId) fields["Organization"] = [finalChurchId];
         if (finalLeaderId) fields["Leader"] = [finalLeaderId];
-        
-        // Explicitly set Submitted By
-        if (authUserId) {
-            fields["Submitted By"] = [authUserId];
-        }
+        if (authUserId) fields["Submitted By"] = [authUserId];
 
         const targetTable = env.PRAYER_REQUESTS_TABLE_NAME || "Prayer Requests";
         const result = await createRecord(targetTable, fields);
@@ -700,26 +692,13 @@ export default {
         const fields = { 
             "Network": [finalNetworkId], 
             "Request": prayerRequest,
-            "Status": "Pending", // Web submissions require moderation
+            "Status": "Pending", 
             "Visibility": "Public"
         };
         if (finalOrgId) fields["Organization"] = [finalOrgId];
         if (finalLeaderId) fields["Leader"] = [finalLeaderId];
 
         await createRecord(env.PRAYER_REQUESTS_TABLE_NAME, fields);
-        return jsonResponse({ status: "Saved" });
-      }
-
-      // 5. PERSONAL PRAYER APP ROUTES (LEGACY)
-      
-      if (url.pathname === "/submit-prayer" && request.method === "POST") {
-        const body = await request.json();
-        // Maps to "Personal Prayer Requests" table via env var
-        await createRecord(env.PRAYER_REQUESTS_TABLE, { 
-          "Leader": [body.leaderId], 
-          "Request Text": body.text, 
-          "Status": "Active" 
-        });
         return jsonResponse({ status: "Saved" });
       }
 
@@ -751,13 +730,14 @@ export default {
         });
       }
 
+      // Legacy Log Prayer
       if (url.pathname === "/log-prayer" && request.method === "POST") {
         const body = await request.json();
-        // Uses legacy "Prayer Logs" table
         await createRecord(env.PRAYER_LOGS_TABLE, { "Prayer Request": [body.prayerRequestId] });
         return jsonResponse({ success: true });
       }
 
+      // Legacy History
       if (url.pathname === "/get-history") {
         const endpoint = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(env.PRAYER_LOGS_TABLE)}?maxRecords=20&sort%5B0%5D%5Bfield%5D=Date&sort%5B0%5D%5Bdirection%5D=desc`;
         const res = await fetch(endpoint, { headers: { Authorization: `Bearer ${env.AIRTABLE_API_KEY || env.AIRTABLE_TOKEN}` } });
@@ -770,6 +750,7 @@ export default {
         return jsonResponse(history);
       }
 
+      // Archive Prayer
       if (url.pathname === "/archive-prayer" && request.method === "POST") {
         const body = await request.json();
         const endpoint = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(env.PRAYER_REQUESTS_TABLE)}/${body.prayerRequestId}`;
