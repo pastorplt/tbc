@@ -4,6 +4,10 @@ compatibility_date = "2025-08-01"
 workers_dev = true
 keep_vars = true
 
+[[routes]]
+pattern = "api.tbc.city/app/*"
+zone_name = "tbc.city"
+
 # KV Namespace Binding for OTP storage
 [[kv_namespaces]]
 binding = "AUTH_STORE"
