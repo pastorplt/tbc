@@ -5,7 +5,7 @@ workers_dev = true
 keep_vars = true
 
 [[routes]]
-pattern = "api.tbc.city/app/*"
+pattern = "api.tbc.city/*"
 zone_name = "tbc.city"
 
 # KV Namespace Binding for OTP storage
