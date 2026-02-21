@@ -125,14 +125,14 @@ export default {
             if (obj) {
                 return withCORS(new Response(obj.body, {
                     headers: { 
-                        'Content-Type': 'image/webp', 
+                        'Content-Type': obj.httpMetadata?.contentType || 'image/jpeg', 
                         'Cache-Control': 'public, max-age=604800, immutable' 
                     }
                 }));
             }
         }
-        // Fallback to Airtable redirect
-        return withCORS(await handleAttachmentRedirect(env, recordId, index, 'Photo'));
+        // Fallback to Pull-Through Proxy
+        return withCORS(await handleAttachmentProxy(env, ctx, recordId, index, 'Photo'));
       }
 
       // 4. IMAGE PROXY: /networks/image/
@@ -147,14 +147,14 @@ export default {
             if (obj) {
                 return withCORS(new Response(obj.body, {
                     headers: { 
-                        'Content-Type': 'image/webp', 
+                        'Content-Type': obj.httpMetadata?.contentType || 'image/jpeg', 
                         'Cache-Control': 'public, max-age=604800, immutable' 
                     }
                 }));
             }
         }
-        // Fallback to Airtable redirect
-        return withCORS(await handleAttachmentRedirect(env, recordId, index, 'Image'));
+        // Fallback to Pull-Through Proxy
+        return withCORS(await handleAttachmentProxy(env, ctx, recordId, index, 'Image'));
       }
 
       // Root check
@@ -228,18 +228,12 @@ async function prewarmAttachments(env, recordId, fieldArray, maxCount = 6) {
 
   const tasks = fieldArray.slice(0, maxCount).map((urlStr, idx) => ({ urlStr, idx }));
 
-  // Resize up to 4 images concurrently per record
+  // Process up to 4 images concurrently per record
   await withConcurrency(tasks, 4, async ({ urlStr, idx }) => {
     const srcUrl = pickAttachmentUrl(urlStr);
     if (!srcUrl) return;
 
-    // Resize at edge to 400px webp using Cloudflare Image Resizing
-    const response = await fetch(srcUrl, {
-      cf: {
-        cacheEverything: true,
-        image: { width: 400, format: 'webp', quality: 80 }
-      }
-    });
+    const response = await fetch(srcUrl);
     
     if (!response.ok) {
       console.error(`Failed to fetch image for prewarm: ${srcUrl} - Status: ${response.status}`);
@@ -247,8 +241,7 @@ async function prewarmAttachments(env, recordId, fieldArray, maxCount = 6) {
     }
 
     const key = r2KeyForImage(recordId, idx, 'w400-webp');
-    // Using response.headers.get('content-type') directly prevents broken images if CF doesn't actually convert to webp
-    const contentType = response.headers.get('content-type') || 'image/webp';
+    const contentType = response.headers.get('content-type') || 'image/jpeg';
     
     await env.NETWORK_IMAGES_BUCKET.put(key, response.body, {
       httpMetadata: { contentType: contentType, cacheControl: 'public, max-age=604800, immutable' }
@@ -273,29 +266,41 @@ async function prewarmAll(env, records) {
   });
 }
 
-/* ---------------- Image proxy cache ---------------- */
+/* ---------------- Image Proxy (Pull-Through Cache) ---------------- */
 
-const urlCache = new Map();
-const CACHE_TTL_MS = 8 * 60 * 1000;
-function getCached(key) { const v = urlCache.get(key); if (!v) return null; if (Date.now() > v.expiresAt) { urlCache.delete(key); return null; } return v.url; }
-function setCached(key, url) { urlCache.set(key, { url, expiresAt: Date.now() + CACHE_TTL_MS }); }
-
-async function handleAttachmentRedirect(env, recordId, index, fieldName) {
+async function handleAttachmentProxy(env, ctx, recordId, index, fieldName) {
   const idx = Number(index);
   if (!Number.isInteger(idx) || idx < 0) return text('Bad index', 400);
 
-  const cacheKey = `${fieldName}:${recordId}:${idx}`;
-  const cached = getCached(cacheKey);
-  if (cached) return redirect(cached, 302, { 'Cache-Control': 'public, max-age=300' });
-
+  // 1. Ask Airtable for the latest fresh URL
   const rec = await fetchRecordById(env, recordId);
-  
   const allUrls = collectPhotoUrls(rec.fields?.[fieldName]);
   const freshUrl = allUrls[idx];
   if (!freshUrl) return text(`${fieldName} URL missing`, 404);
 
-  setCached(cacheKey, freshUrl);
-  return redirect(freshUrl, 302, { 'Cache-Control': 'public, max-age=300' });
+  // 2. Fetch the actual image bytes from Airtable
+  const response = await fetch(freshUrl);
+  if (!response.ok) return text('Failed to fetch image from Airtable', response.status);
+
+  const contentType = response.headers.get('content-type') || 'image/jpeg';
+
+  // 3. Save a copy of it to R2 in the background so the NEXT user gets it instantly
+  if (env.NETWORK_IMAGES_BUCKET) {
+    const cacheResponse = response.clone();
+    const key = `images/${recordId}/${idx}/w400-webp`;
+    ctx.waitUntil(env.NETWORK_IMAGES_BUCKET.put(key, cacheResponse.body, {
+      httpMetadata: { contentType, cacheControl: 'public, max-age=604800, immutable' }
+    }));
+  }
+
+  // 4. Return the bytes directly to the browser (Keeping the api.tbc.city URL intact)
+  return new Response(response.body, {
+    status: 200,
+    headers: {
+      'Content-Type': contentType,
+      'Cache-Control': 'public, max-age=604800, immutable'
+    }
+  });
 }
 
 function parseAttachmentPath(pathname, prefix) {
@@ -317,11 +322,10 @@ function pickAttachmentUrl(att) {
     const trimmed = att.trim(); 
     return /^https?:\/\//i.test(trimmed) ? trimmed : null;
   }
-  // BUG 5 FIX: Prefer original high-res image URL before falling back to thumbnails
-  return att?.url || att?.thumbnails?.large?.url || att?.thumbnails?.full?.url || null;
+  // Fallback priority: Thumbnails first (saves bandwidth), then original URL
+  return att?.thumbnails?.large?.url || att?.url || att?.thumbnails?.full?.url || null;
 }
 function normalizeUrl(u) {
-  // BUG 1 FIX: Removed the regex that corrupted Airtable AWS signatures.
   let s = String(u || '').trim();
   s = s.replace(/^%20+/i, '').replace(/^\s+/, '');
   return s;
@@ -415,4 +419,3 @@ function withCORS(res) {
 }
 function text(s, status = 200) { return new Response(s, { status, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }); }
 function json(obj, status = 200) { return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json; charset=utf-8' } }); }
-function redirect(location, status = 302, headers = {}) { return new Response(null, { status, headers: { Location: location, ...headers } }); }
