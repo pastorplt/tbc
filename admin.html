@@ -55,6 +55,22 @@
     .btn:active { transform: translateY(1px); }
     .btn[disabled] { opacity:.6; cursor:not-allowed; }
 
+    .btn-pair {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .btn-pair .btn {
+      margin-bottom: 0;
+    }
+    .btn-secondary {
+      border-color: #d1d5db;
+      color: #6b7280;
+      font-weight: 600;
+    }
+    .btn-secondary:hover { background: #f3f4f6; color: var(--ink); }
+
     .card + .card { margin-top: 24px; }
 
     .btn-link {
@@ -78,7 +94,7 @@
       border: 1px solid #d1d5db;
       font-size: 15px;
       margin-bottom: 10px;
-      box-sizing: border-box; /* Fix width issues */
+      box-sizing: border-box;
     }
     input[type="text"]:focus {
       outline: 2px solid rgba(191,52,38,.35);
@@ -118,7 +134,7 @@
       max-width: 80vw;
     }
 
-    /* Confirm dialog (accessible modal) */
+    /* Confirm dialog */
     .modal-backdrop {
       position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 10050;
       display: none;
@@ -149,11 +165,10 @@
     }
     .btn-danger:hover { filter: brightness(0.92); }
     .btn-ghost { background:#fff; }
-    
-    /* Section dividers */
+
     .section-label {
-        font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; 
-        color: #6b7280; font-weight: 700; margin: 16px 0 8px;
+      font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;
+      color: #6b7280; font-weight: 700; margin: 16px 0 8px;
     }
   </style>
 </head>
@@ -163,7 +178,7 @@
 
   <main>
     <h1>Admin Console</h1>
-    
+
     <div class="card" role="group" aria-label="Regeneration tasks">
       <h2>Data Regeneration</h2>
       <p style="margin:0 0 16px;font-size:14px;color:#4b5563;">Trigger Cloudflare Workers to fetch fresh data from Airtable and update the JSON files.</p>
@@ -172,13 +187,23 @@
       <button class="btn admin-action" data-name="Sonoma Disaster Data" data-url="https://api.tbc.city/disaster/admin/regenerate">
         Regen Disaster Data (Org Points)
       </button>
-      
       <button class="btn admin-action" data-name="Resource Data" data-url="https://api.tbc.city/disaster/admin/regenerate-resources">
         Regen Resource Data
       </button>
 
+      <div class="section-label">Networks</div>
+      <!-- Flush (default): regenerates GeoJSON + overwrites all cached images -->
+      <!-- No-flush: regenerates GeoJSON only, skips images already in R2 -->
+      <div class="btn-pair">
+        <button class="btn admin-action" data-name="Networks" data-url="https://api.tbc.city/networks/admin/regenerate">
+          Regen Networks + Images
+        </button>
+        <button class="btn btn-secondary admin-action" data-name="Networks (no image flush)" data-url="https://api.tbc.city/networks/admin/regenerate-noflush">
+          Regen Networks (no flush)
+        </button>
+      </div>
+
       <div class="section-label">Other Datasets</div>
-      <button class="btn admin-action" data-name="Networks" data-url="https://api.tbc.city/networks/admin/regenerate">Regen Networks</button>
       <button class="btn admin-action" data-name="Organizations" data-url="https://api.tbc.city/orgs/admin/regenerate">Regen Orgs</button>
     </div>
 
@@ -241,11 +266,11 @@
     const confirmTitle = document.getElementById('confirmTitle');
     const confirmText = document.getElementById('confirmText');
 
-    let pending = null; // {name, url, button}
+    let pending = null;
 
     function openModal(task) {
       pending = task;
-      confirmTitle.textContent = `Run “${task.name}” job?`;
+      confirmTitle.textContent = `Run "${task.name}" job?`;
       confirmText.textContent = `This will POST to the ${task.name} regeneration endpoint. Proceed?`;
       modal.classList.add('open');
       backdrop.classList.add('open');
@@ -257,12 +282,8 @@
       pending = null;
     }
 
-    // close on ESC / click backdrop
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        closeModal();
-        closeDeleteModal();
-      }
+      if (e.key === 'Escape') { closeModal(); closeDeleteModal(); }
     });
     backdrop.addEventListener('click', closeModal);
     cancelBtn.addEventListener('click', closeModal);
@@ -318,26 +339,23 @@
     document.addEventListener("click", (e) => {
       const btn = e.target.closest(".admin-action");
       if (!btn) return;
-
       const task = { name: btn.dataset.name || 'Task', url: btn.dataset.url, button: btn };
       openModal(task);
     });
 
-    // Run after confirmation
     confirmBtn.addEventListener("click", async () => {
       if (!pending) return;
       const { button, url, name } = pending;
+      const originalText = button.textContent.trim();
 
-      // Disable button while running
       button.disabled = true;
-      button.textContent = `Running ${name}…`;
+      button.textContent = `Running…`;
 
       closeModal();
       await postAdmin(url, { button, name });
 
-      // Restore button
       button.disabled = false;
-      button.textContent = `Regen ${name}`;
+      button.textContent = originalText;
     });
 
     // ===== Delete workflow =====
