@@ -62,26 +62,18 @@ export default {
 
           const leaders = normalizeLeaders(f['Network Leaders Names']) || '';
           
-          // REMOVED: Prayer Request fetching logic as requested
-
           let photoUrls = [];
           const photoField = f['Photo'];
-          // Check if field has actual attachment objects
-          if (Array.isArray(photoField) && typeof photoField[0] === 'object' && (photoField[0]?.url || photoField[0]?.thumbnails)) {
-            // Use local proxy URL
-            photoUrls = photoField.slice(0, 6).map((_, idx) => `${origin}/img/${r.id}/${idx}`);
-          } else {
-            // It's a string/text field
-            photoUrls = [...new Set(collectPhotoUrls(photoField).map(normalizeUrl))].slice(0, 6);
+          const extractedPhotos = collectPhotoUrls(photoField);
+          if (extractedPhotos.length > 0) {
+            photoUrls = extractedPhotos.slice(0, 6).map((_, idx) => `${origin}/img/${r.id}/${idx}`);
           }
 
           let imageUrls = [];
           const imageField = f['Image'];
-          if (Array.isArray(imageField) && typeof imageField[0] === 'object' && (imageField[0]?.url || imageField[0]?.thumbnails)) {
-            // Use local proxy URL
-            imageUrls = imageField.slice(0, 6).map((_, idx) => `${origin}/image/${r.id}/${idx}`);
-          } else {
-            imageUrls = [...new Set(collectPhotoUrls(imageField).map(normalizeUrl))].slice(0, 6);
+          const extractedImages = collectPhotoUrls(imageField);
+          if (extractedImages.length > 0) {
+            imageUrls = extractedImages.slice(0, 6).map((_, idx) => `${origin}/image/${r.id}/${idx}`);
           }
 
           const [photo1='', photo2='', photo3='', photo4='', photo5='', photo6=''] = photoUrls;
@@ -100,7 +92,6 @@ export default {
               tags: normalizeTextField(f['Tags']),
               number_of_churches: f['Number of Churches'] ?? '',
               unify_lead: normalizeTextField(f['Unify Lead']),
-              // REMOVED: latest_prayer_request, all_prayer_requests, prayer_request
               photo1, photo2, photo3, photo4, photo5, photo6,
               photo_count: photoUrls.filter(Boolean).length,
               image1, image2, image3, image4, image5, image6,
@@ -298,11 +289,9 @@ async function handleAttachmentRedirect(env, recordId, index, fieldName) {
   if (cached) return redirect(cached, 302, { 'Cache-Control': 'public, max-age=300' });
 
   const rec = await fetchRecordById(env, recordId);
-  const attachments = Array.isArray(rec.fields?.[fieldName]) ? rec.fields[fieldName] : [];
-  const att = attachments[idx];
-  if (!att) return text(`${fieldName} not found`, 404);
-
-  const freshUrl = pickAttachmentUrl(att);
+  
+  const allUrls = collectPhotoUrls(rec.fields?.[fieldName]);
+  const freshUrl = allUrls[idx];
   if (!freshUrl) return text(`${fieldName} URL missing`, 404);
 
   setCached(cacheKey, freshUrl);
