@@ -2,8 +2,8 @@
 // Routes:
 //   GET  /networks.geojson         -> serve latest from R2
 //   POST /admin/regenerate         -> (Bearer REGEN_TOKEN) rebuild from Airtable and publish to R2
-//   GET  /img/...                  -> Proxy for 'Photo' field
-//   GET  /image/...                -> Proxy for 'Image' field
+//   GET  /networks/img/...         -> Proxy for 'Photo' field
+//   GET  /networks/image/...       -> Proxy for 'Image' field
 //
 // Requires (Settings → Variables/Secrets):
 //   AIRTABLE_TOKEN, AIRTABLE_BASE_ID, NETWORKS_TABLE_NAME, REGEN_TOKEN
@@ -45,8 +45,6 @@ export default {
         const records = await fetchAllRecords(env);
         
         // --- OPTIMIZATION: Background Image Processing ---
-        // We move this to the background using ctx.waitUntil so the HTTP response
-        // returns immediately and the worker doesn't time out while processing images.
         if (env.NETWORK_IMAGES_BUCKET) {
             ctx.waitUntil(prewarmAll(env, records));
         }
@@ -63,17 +61,17 @@ export default {
           const leaders = normalizeLeaders(f['Network Leaders Names']) || '';
           
           let photoUrls = [];
-          const photoField = f['Photo'];
-          const extractedPhotos = collectPhotoUrls(photoField);
+          const extractedPhotos = collectPhotoUrls(f['Photo']);
           if (extractedPhotos.length > 0) {
-            photoUrls = extractedPhotos.slice(0, 6).map((_, idx) => `${origin}/img/${r.id}/${idx}`);
+            // FIX: Explicitly added /networks/ to the proxy path so it hits this worker
+            photoUrls = extractedPhotos.slice(0, 6).map((_, idx) => `${origin}/networks/img/${r.id}/${idx}`);
           }
 
           let imageUrls = [];
-          const imageField = f['Image'];
-          const extractedImages = collectPhotoUrls(imageField);
+          const extractedImages = collectPhotoUrls(f['Image']);
           if (extractedImages.length > 0) {
-            imageUrls = extractedImages.slice(0, 6).map((_, idx) => `${origin}/image/${r.id}/${idx}`);
+            // FIX: Explicitly added /networks/ to the proxy path
+            imageUrls = extractedImages.slice(0, 6).map((_, idx) => `${origin}/networks/image/${r.id}/${idx}`);
           }
 
           const [photo1='', photo2='', photo3='', photo4='', photo5='', photo6=''] = photoUrls;
@@ -117,9 +115,9 @@ export default {
         }));
       }
 
-      // 3. IMAGE PROXY: /img/
-      if (request.method === 'GET' && pathname.startsWith('/img/')) {
-        const { recordId, index } = parseAttachmentPath(pathname, 'img');
+      // 3. IMAGE PROXY: /networks/img/
+      if (request.method === 'GET' && pathname.startsWith('/networks/img/')) {
+        const { recordId, index } = parseAttachmentPath(pathname, '/networks/img/');
         if (!recordId) return withCORS(text('Bad index', 400));
         
         // Try serving from R2 cache first
@@ -139,9 +137,9 @@ export default {
         return withCORS(await handleAttachmentRedirect(env, recordId, index, 'Photo'));
       }
 
-      // 4. IMAGE PROXY: /image/
-      if (request.method === 'GET' && pathname.startsWith('/image/')) {
-        const { recordId, index } = parseAttachmentPath(pathname, 'image');
+      // 4. IMAGE PROXY: /networks/image/
+      if (request.method === 'GET' && pathname.startsWith('/networks/image/')) {
+        const { recordId, index } = parseAttachmentPath(pathname, '/networks/image/');
         if (!recordId) return withCORS(text('Bad index', 400));
 
         // Try serving from R2 cache first
@@ -249,13 +247,11 @@ async function prewarmAttachments(env, recordId, fieldArray, maxCount = 6) {
   });
 }
 
-// --- OPTIMIZED PREWARM FUNCTION ---
 async function prewarmAll(env, records) {
   // Process records in parallel batches of 10
   await withConcurrency(records, 10, async (r) => {
     const f = r.fields || {};
     
-    // collectPhotoUrls now properly extracts all URLs as strings
     const photoUrls = collectPhotoUrls(f['Photo']);
     const imageUrls = collectPhotoUrls(f['Image']);
 
@@ -293,11 +289,11 @@ async function handleAttachmentRedirect(env, recordId, index, fieldName) {
   return redirect(freshUrl, 302, { 'Cache-Control': 'public, max-age=300' });
 }
 
+// FIX: Replaced the old broken split('/') parser with a robust prefix replacer
 function parseAttachmentPath(pathname, prefix) {
-  const parts = pathname.split('/');
-  const recordId = parts[2];
-  const index = Number(parts[3]);
-  return { recordId, index };
+  const relative = pathname.replace(prefix, ""); 
+  const parts = relative.split("/").filter(Boolean);
+  return { recordId: parts[0], index: Number(parts[1] || 0) };
 }
 
 /* ---------------- Normalizers ---------------- */
@@ -310,7 +306,7 @@ function parseGeometry(raw) {
 function pickAttachmentUrl(att) {
   if (!att) return null;
   if (typeof att === 'string') {
-    const trimmed = att.trim(); // Prevent regex failures from leading spaces
+    const trimmed = att.trim(); 
     return /^https?:\/\//i.test(trimmed) ? trimmed : null;
   }
   return att?.thumbnails?.large?.url || att?.thumbnails?.full?.url || att?.url || null;
@@ -333,7 +329,7 @@ function collectPhotoUrls(value) {
         try { pushAny(JSON.parse(s)); return; } catch {}
       }
       (s.includes(',') ? s.split(',') : [s]).forEach((part) => {
-        const maybe = pickAttachmentUrl(part.trim()); // Added trim() here!
+        const maybe = pickAttachmentUrl(part.trim());
         if (maybe) urls.add(normalizeUrl(maybe));
       });
       return;
