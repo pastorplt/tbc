@@ -1,9 +1,9 @@
 // Static publishing model for your network map
 // Routes:
-//   GET  /networks.geojson         -> serve latest from R2
-//   POST /admin/regenerate         -> (Bearer REGEN_TOKEN) rebuild from Airtable and publish to R2
-//   GET  /networks/img/...         -> Proxy for 'Photo' field
-//   GET  /networks/image/...       -> Proxy for 'Image' field
+//   GET  /networks.geojson              -> serve latest from R2
+//   POST /networks/admin/regenerate     -> (Bearer REGEN_TOKEN) rebuild from Airtable and publish to R2
+//   GET  /networks/img/<id>/<index>     -> Proxy for 'Photo' field
+//   GET  /networks/image/<id>/<index>   -> Proxy for 'Image' field
 //
 // Requires (Settings → Variables/Secrets):
 //   AIRTABLE_TOKEN, AIRTABLE_BASE_ID, NETWORKS_TABLE_NAME, REGEN_TOKEN
@@ -41,14 +41,13 @@ export default {
           return withCORS(json({ error: 'Unauthorized' }, 401));
         }
 
-        // Fetch data
         const records = await fetchAllRecords(env);
-        
-        // --- OPTIMIZATION: Background Image Processing ---
+
+        // Best-effort background prewarm. The pull-through cache in the proxy
+        // routes guarantees images reach R2 even if prewarm misses some.
         if (env.NETWORK_IMAGES_BUCKET) {
-            ctx.waitUntil(prewarmAll(env, records));
+          ctx.waitUntil(prewarmAll(env, records));
         }
-        // -------------------------------------------------
 
         const origin = new URL(request.url).origin;
         const features = [];
@@ -59,7 +58,7 @@ export default {
           if (!geometry) continue;
 
           const leaders = normalizeLeaders(f['Network Leaders Names']) || '';
-          
+
           let photoUrls = [];
           const extractedPhotos = collectPhotoUrls(f['Photo']);
           if (extractedPhotos.length > 0) {
@@ -86,7 +85,8 @@ export default {
               status: normalizeTextField(f['Status']),
               county: normalizeTextField(f['County']),
               tags: normalizeTextField(f['Tags']),
-              number_of_churches: f['Number of Churches'] ?? '',
+              // FIX: normalize like all other fields to handle array/object values from Airtable
+              number_of_churches: normalizeTextField(f['Number of Churches']),
               unify_lead: normalizeTextField(f['Unify Lead']),
               photo1, photo2, photo3, photo4, photo5, photo6,
               photo_count: photoUrls.filter(Boolean).length,
@@ -109,51 +109,49 @@ export default {
           ok: true,
           features: features.length,
           updatedAt: new Date().toISOString(),
-          note: "Image optimization running in background"
+          note: 'Image caching running in background'
         }));
       }
 
       // 3. IMAGE PROXY: /networks/img/
       if (request.method === 'GET' && pathname.startsWith('/networks/img/')) {
         const { recordId, index } = parseAttachmentPath(pathname, '/networks/img/');
-        if (!recordId) return withCORS(text('Bad index', 400));
-        
-        // Try serving from R2 cache first
-        if (env.NETWORK_IMAGES_BUCKET) {
-            const key = `images/${recordId}/${index}/w400-webp`;
-            const obj = await env.NETWORK_IMAGES_BUCKET.get(key);
-            if (obj) {
-                return withCORS(new Response(obj.body, {
-                    headers: { 
-                        'Content-Type': obj.httpMetadata?.contentType || 'image/jpeg', 
-                        'Cache-Control': 'public, max-age=604800, immutable' 
-                    }
-                }));
-            }
+        // FIX: validate recordId format and index before any downstream use
+        if (!isValidRecordId(recordId) || !isValidIndex(index)) {
+          return withCORS(text('Bad request', 400));
         }
-        // Fallback to Pull-Through Proxy
+        if (env.NETWORK_IMAGES_BUCKET) {
+          const obj = await env.NETWORK_IMAGES_BUCKET.get(r2Key(recordId, index));
+          if (obj) {
+            return withCORS(new Response(obj.body, {
+              headers: {
+                'Content-Type': obj.httpMetadata?.contentType || 'image/jpeg',
+                'Cache-Control': 'public, max-age=604800, immutable'
+              }
+            }));
+          }
+        }
         return withCORS(await handleAttachmentProxy(env, ctx, recordId, index, 'Photo'));
       }
 
       // 4. IMAGE PROXY: /networks/image/
       if (request.method === 'GET' && pathname.startsWith('/networks/image/')) {
         const { recordId, index } = parseAttachmentPath(pathname, '/networks/image/');
-        if (!recordId) return withCORS(text('Bad index', 400));
-
-        // Try serving from R2 cache first
-        if (env.NETWORK_IMAGES_BUCKET) {
-            const key = `images/${recordId}/${index}/w400-webp`;
-            const obj = await env.NETWORK_IMAGES_BUCKET.get(key);
-            if (obj) {
-                return withCORS(new Response(obj.body, {
-                    headers: { 
-                        'Content-Type': obj.httpMetadata?.contentType || 'image/jpeg', 
-                        'Cache-Control': 'public, max-age=604800, immutable' 
-                    }
-                }));
-            }
+        // FIX: validate recordId format and index before any downstream use
+        if (!isValidRecordId(recordId) || !isValidIndex(index)) {
+          return withCORS(text('Bad request', 400));
         }
-        // Fallback to Pull-Through Proxy
+        if (env.NETWORK_IMAGES_BUCKET) {
+          const obj = await env.NETWORK_IMAGES_BUCKET.get(r2Key(recordId, index));
+          if (obj) {
+            return withCORS(new Response(obj.body, {
+              headers: {
+                'Content-Type': obj.httpMetadata?.contentType || 'image/jpeg',
+                'Cache-Control': 'public, max-age=604800, immutable'
+              }
+            }));
+          }
+        }
         return withCORS(await handleAttachmentProxy(env, ctx, recordId, index, 'Image'));
       }
 
@@ -168,6 +166,29 @@ export default {
     }
   }
 };
+
+/* ---------------- R2 key helper ---------------- */
+
+// FIX: Single source of truth for the R2 key format used by both the proxy
+// routes and prewarm. Renamed from /w400-webp to /original since no
+// transformation is applied — the image is stored as-is from Airtable.
+function r2Key(recordId, index) {
+  return `images/${recordId}/${index}/original`;
+}
+
+/* ---------------- Validation helpers ---------------- */
+
+// FIX: Validate recordId before using it in R2 keys or Airtable API URLs
+// to prevent path traversal and URL injection attacks.
+function isValidRecordId(id) {
+  return typeof id === 'string' && /^rec[a-zA-Z0-9]{14}$/.test(id);
+}
+
+// FIX: Validate index is a real integer in range before the R2 lookup,
+// preventing NaN keys like images/recXXX/NaN/original.
+function isValidIndex(index) {
+  return Number.isInteger(index) && index >= 0 && index <= 5;
+}
 
 /* ---------------- Airtable fetch ---------------- */
 
@@ -193,107 +214,40 @@ async function fetchAllRecords(env) {
 }
 
 async function fetchRecordById(env, recordId) {
+  // recordId is validated by callers before reaching here
   const url = `https://api.airtable.com/v0/${env.AIRTABLE_BASE_ID}/${encodeURIComponent(env.NETWORKS_TABLE_NAME)}/${recordId}`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${env.AIRTABLE_TOKEN}` } });
   if (!res.ok) throw new Error(`Airtable error ${res.status}: ${await res.text()}`);
   return res.json();
 }
 
-/* ---------------- R2 prewarm helpers ---------------- */
+/* ---------------- Image proxy (pull-through cache) ---------------- */
 
-function r2KeyForImage(recordId, index, variant = 'w400-webp') {
-  return `images/${recordId}/${index}/${variant}`;
-}
-
-async function withConcurrency(items, limit, fn) {
-  const results = [];
-  let i = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (i < items.length) {
-      const cur = i++;
-      try { 
-        results[cur] = await fn(items[cur]); 
-      } catch (e) {
-        console.error(`Concurrency error processing item at index ${cur}:`, e);
-      }
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
-
-async function prewarmAttachments(env, recordId, fieldArray, maxCount = 6) {
-  if (!env.NETWORK_IMAGES_BUCKET) return; 
-  if (!Array.isArray(fieldArray) || fieldArray.length === 0) return;
-
-  const tasks = fieldArray.slice(0, maxCount).map((urlStr, idx) => ({ urlStr, idx }));
-
-  // Process up to 4 images concurrently per record
-  await withConcurrency(tasks, 4, async ({ urlStr, idx }) => {
-    const srcUrl = pickAttachmentUrl(urlStr);
-    if (!srcUrl) return;
-
-    const response = await fetch(srcUrl);
-    
-    if (!response.ok) {
-      console.error(`Failed to fetch image for prewarm: ${srcUrl} - Status: ${response.status}`);
-      return;
-    }
-
-    const key = r2KeyForImage(recordId, idx, 'w400-webp');
-    const contentType = response.headers.get('content-type') || 'image/jpeg';
-    
-    await env.NETWORK_IMAGES_BUCKET.put(key, response.body, {
-      httpMetadata: { contentType: contentType, cacheControl: 'public, max-age=604800, immutable' }
-    });
-  });
-}
-
-async function prewarmAll(env, records) {
-  // Process records in parallel batches of 10
-  await withConcurrency(records, 10, async (r) => {
-    const f = r.fields || {};
-    
-    const photoUrls = collectPhotoUrls(f['Photo']);
-    const imageUrls = collectPhotoUrls(f['Image']);
-
-    if (photoUrls.length > 0) {
-      await prewarmAttachments(env, r.id, photoUrls, 6);
-    }
-    if (imageUrls.length > 0) {
-      await prewarmAttachments(env, r.id, imageUrls, 6);
-    }
-  });
-}
-
-/* ---------------- Image Proxy (Pull-Through Cache) ---------------- */
-
+// On an R2 miss: fetches a fresh record from Airtable (guarantees a non-expired
+// URL), fetches the image bytes, serves them to the browser, and writes to R2
+// in the background. Every image reaches R2 after its first request regardless
+// of whether prewarm succeeded.
 async function handleAttachmentProxy(env, ctx, recordId, index, fieldName) {
-  const idx = Number(index);
-  if (!Number.isInteger(idx) || idx < 0) return text('Bad index', 400);
-
-  // 1. Ask Airtable for the latest fresh URL
   const rec = await fetchRecordById(env, recordId);
   const allUrls = collectPhotoUrls(rec.fields?.[fieldName]);
-  const freshUrl = allUrls[idx];
+  const freshUrl = allUrls[index];
   if (!freshUrl) return text(`${fieldName} URL missing`, 404);
 
-  // 2. Fetch the actual image bytes from Airtable
   const response = await fetch(freshUrl);
   if (!response.ok) return text('Failed to fetch image from Airtable', response.status);
 
   const contentType = response.headers.get('content-type') || 'image/jpeg';
 
-  // 3. Save a copy of it to R2 in the background so the NEXT user gets it instantly
+  // Write to R2 in the background; browser doesn't wait for it
   if (env.NETWORK_IMAGES_BUCKET) {
-    const cacheResponse = response.clone();
-    const key = `images/${recordId}/${idx}/w400-webp`;
-    ctx.waitUntil(env.NETWORK_IMAGES_BUCKET.put(key, cacheResponse.body, {
-      httpMetadata: { contentType, cacheControl: 'public, max-age=604800, immutable' }
-    }));
+    const key = r2Key(recordId, index);
+    ctx.waitUntil(
+      env.NETWORK_IMAGES_BUCKET.put(key, response.clone().body, {
+        httpMetadata: { contentType, cacheControl: 'public, max-age=604800, immutable' }
+      })
+    );
   }
 
-  // 4. Return the bytes directly to the browser (Keeping the api.tbc.city URL intact)
   return new Response(response.body, {
     status: 200,
     headers: {
@@ -303,10 +257,75 @@ async function handleAttachmentProxy(env, ctx, recordId, index, fieldName) {
   });
 }
 
+/* ---------------- R2 prewarm (best-effort) ---------------- */
+
+// Runs in the background after regenerate. Not the critical path —
+// the pull-through cache above handles any misses. Failures are logged
+// but not fatal.
+
+async function withConcurrency(items, limit, fn) {
+  const results = [];
+  let i = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) {
+      const cur = i++;
+      try {
+        results[cur] = await fn(items[cur]);
+      } catch (e) {
+        console.error(`Prewarm error at index ${cur}:`, e);
+      }
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+async function prewarmAttachments(env, recordId, urlStrings, maxCount = 6) {
+  if (!env.NETWORK_IMAGES_BUCKET) return;
+  if (!Array.isArray(urlStrings) || urlStrings.length === 0) return;
+
+  const tasks = urlStrings.slice(0, maxCount).map((urlStr, idx) => ({ urlStr, idx }));
+
+  await withConcurrency(tasks, 4, async ({ urlStr, idx }) => {
+    const srcUrl = pickAttachmentUrl(urlStr);
+    if (!srcUrl) return;
+
+    const key = r2Key(recordId, idx);
+
+    // FIX: skip images already in R2 to avoid redundant Airtable fetches
+    // and R2 write costs on every regeneration
+    const existing = await env.NETWORK_IMAGES_BUCKET.head(key);
+    if (existing) return;
+
+    const response = await fetch(srcUrl);
+    if (!response.ok) {
+      console.error(`Prewarm fetch failed for record ${recordId}[${idx}]: ${response.status}`);
+      return;
+    }
+
+    const contentType = response.headers.get('content-type') || 'image/jpeg';
+    await env.NETWORK_IMAGES_BUCKET.put(key, response.body, {
+      httpMetadata: { contentType, cacheControl: 'public, max-age=604800, immutable' }
+    });
+  });
+}
+
+async function prewarmAll(env, records) {
+  await withConcurrency(records, 10, async (r) => {
+    const f = r.fields || {};
+    const photoUrls = collectPhotoUrls(f['Photo']);
+    const imageUrls = collectPhotoUrls(f['Image']);
+    if (photoUrls.length > 0) await prewarmAttachments(env, r.id, photoUrls, 6);
+    if (imageUrls.length > 0) await prewarmAttachments(env, r.id, imageUrls, 6);
+  });
+}
+
+/* ---------------- Path parser ---------------- */
+
 function parseAttachmentPath(pathname, prefix) {
-  const relative = pathname.replace(prefix, ""); 
-  const parts = relative.split("/").filter(Boolean);
-  return { recordId: parts[0], index: Number(parts[1] || 0) };
+  const relative = pathname.replace(prefix, '');
+  const parts = relative.split('/').filter(Boolean);
+  return { recordId: parts[0], index: Number(parts[1] ?? NaN) };
 }
 
 /* ---------------- Normalizers ---------------- */
@@ -316,20 +335,22 @@ function parseGeometry(raw) {
   try { const g = typeof raw === 'string' ? JSON.parse(raw) : raw; return g?.type ? g : null; }
   catch { return null; }
 }
+
 function pickAttachmentUrl(att) {
   if (!att) return null;
   if (typeof att === 'string') {
-    const trimmed = att.trim(); 
+    const trimmed = att.trim();
     return /^https?:\/\//i.test(trimmed) ? trimmed : null;
   }
-  // Fallback priority: Thumbnails first (saves bandwidth), then original URL
+  // Thumbnails preferred over original to save bandwidth (no image resizing available)
   return att?.thumbnails?.large?.url || att?.url || att?.thumbnails?.full?.url || null;
 }
+
 function normalizeUrl(u) {
-  let s = String(u || '').trim();
-  s = s.replace(/^%20+/i, '').replace(/^\s+/, '');
-  return s;
+  // FIX: removed redundant second whitespace strip — .trim() already handles it
+  return String(u || '').trim().replace(/^%20+/i, '');
 }
+
 function collectPhotoUrls(value) {
   const urls = new Set();
   const pushAny = (v) => {
@@ -358,6 +379,7 @@ function collectPhotoUrls(value) {
   pushAny(value);
   return Array.from(urls);
 }
+
 function normalizeLeaders(value) {
   const parts = [];
   const pushClean = (s) => {
@@ -376,16 +398,17 @@ function normalizeLeaders(value) {
       } else pushClean(v);
     });
   } else if (typeof value === 'string') {
-    const text = value.trim();
+    const t = value.trim();
     try {
-      if (text.startsWith('[') && text.endsWith(']')) {
-        const parsed = JSON.parse(text);
+      if (t.startsWith('[') && t.endsWith(']')) {
+        const parsed = JSON.parse(t);
         if (Array.isArray(parsed)) parsed.forEach(pushClean); else pushClean(parsed);
-      } else text.split(/[;,]/).forEach(s => pushClean(s));
-    } catch { text.split(/[;,]/).forEach(s => pushClean(s)); }
+      } else t.split(/[;,]/).forEach(s => pushClean(s));
+    } catch { t.split(/[;,]/).forEach(s => pushClean(s)); }
   } else if (value != null) pushClean(value);
   return [...new Set(parts)].join(', ');
 }
+
 function normalizeTextField(value) {
   if (value == null) return '';
   const out = [];
@@ -407,7 +430,7 @@ function normalizeTextField(value) {
   return [...new Set(out)].join(', ');
 }
 
-/* ---------------- tiny response helpers ---------------- */
+/* ---------------- Response helpers ---------------- */
 
 function withCORS(res) {
   const h = new Headers(res.headers);
