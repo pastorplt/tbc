@@ -63,14 +63,12 @@ export default {
           let photoUrls = [];
           const extractedPhotos = collectPhotoUrls(f['Photo']);
           if (extractedPhotos.length > 0) {
-            // FIX: Explicitly added /networks/ to the proxy path so it hits this worker
             photoUrls = extractedPhotos.slice(0, 6).map((_, idx) => `${origin}/networks/img/${r.id}/${idx}`);
           }
 
           let imageUrls = [];
           const extractedImages = collectPhotoUrls(f['Image']);
           if (extractedImages.length > 0) {
-            // FIX: Explicitly added /networks/ to the proxy path
             imageUrls = extractedImages.slice(0, 6).map((_, idx) => `${origin}/networks/image/${r.id}/${idx}`);
           }
 
@@ -213,7 +211,11 @@ async function withConcurrency(items, limit, fn) {
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
     while (i < items.length) {
       const cur = i++;
-      try { results[cur] = await fn(items[cur]); } catch (e) {}
+      try { 
+        results[cur] = await fn(items[cur]); 
+      } catch (e) {
+        console.error(`Concurrency error processing item at index ${cur}:`, e);
+      }
     }
   });
   await Promise.all(workers);
@@ -238,11 +240,18 @@ async function prewarmAttachments(env, recordId, fieldArray, maxCount = 6) {
         image: { width: 400, format: 'webp', quality: 80 }
       }
     });
-    if (!response.ok) return;
+    
+    if (!response.ok) {
+      console.error(`Failed to fetch image for prewarm: ${srcUrl} - Status: ${response.status}`);
+      return;
+    }
 
     const key = r2KeyForImage(recordId, idx, 'w400-webp');
+    // Using response.headers.get('content-type') directly prevents broken images if CF doesn't actually convert to webp
+    const contentType = response.headers.get('content-type') || 'image/webp';
+    
     await env.NETWORK_IMAGES_BUCKET.put(key, response.body, {
-      httpMetadata: { contentType: 'image/webp', cacheControl: 'public, max-age=604800, immutable' }
+      httpMetadata: { contentType: contentType, cacheControl: 'public, max-age=604800, immutable' }
     });
   });
 }
@@ -289,7 +298,6 @@ async function handleAttachmentRedirect(env, recordId, index, fieldName) {
   return redirect(freshUrl, 302, { 'Cache-Control': 'public, max-age=300' });
 }
 
-// FIX: Replaced the old broken split('/') parser with a robust prefix replacer
 function parseAttachmentPath(pathname, prefix) {
   const relative = pathname.replace(prefix, ""); 
   const parts = relative.split("/").filter(Boolean);
@@ -309,13 +317,13 @@ function pickAttachmentUrl(att) {
     const trimmed = att.trim(); 
     return /^https?:\/\//i.test(trimmed) ? trimmed : null;
   }
-  return att?.thumbnails?.large?.url || att?.thumbnails?.full?.url || att?.url || null;
+  // BUG 5 FIX: Prefer original high-res image URL before falling back to thumbnails
+  return att?.url || att?.thumbnails?.large?.url || att?.thumbnails?.full?.url || null;
 }
 function normalizeUrl(u) {
+  // BUG 1 FIX: Removed the regex that corrupted Airtable AWS signatures.
   let s = String(u || '').trim();
   s = s.replace(/^%20+/i, '').replace(/^\s+/, '');
-  s = s.replace(/^(https?:)\/{2,}/i, (_, p1) => `${p1}//`);
-  s = s.replace(/([^:])\/{2,}/g, '$1/');
   return s;
 }
 function collectPhotoUrls(value) {
