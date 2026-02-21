@@ -226,15 +226,14 @@ async function prewarmAttachments(env, recordId, fieldArray, maxCount = 6) {
   if (!env.NETWORK_IMAGES_BUCKET) return; 
   if (!Array.isArray(fieldArray) || fieldArray.length === 0) return;
 
-  const tasks = fieldArray.slice(0, maxCount).map((att, idx) => ({ att, idx }));
+  const tasks = fieldArray.slice(0, maxCount).map((urlStr, idx) => ({ urlStr, idx }));
 
   // Resize up to 4 images concurrently per record
-  await withConcurrency(tasks, 4, async ({ att, idx }) => {
-    const srcUrl = pickAttachmentUrl(att);
+  await withConcurrency(tasks, 4, async ({ urlStr, idx }) => {
+    const srcUrl = pickAttachmentUrl(urlStr);
     if (!srcUrl) return;
 
     // Resize at edge to 400px webp using Cloudflare Image Resizing
-    // Note: Requires Cloudflare Images or Pro plan. If fails, it just won't cache.
     const response = await fetch(srcUrl, {
       cf: {
         cacheEverything: true,
@@ -251,24 +250,20 @@ async function prewarmAttachments(env, recordId, fieldArray, maxCount = 6) {
 }
 
 // --- OPTIMIZED PREWARM FUNCTION ---
-// Replaces previous loop-based approach to improve speed
 async function prewarmAll(env, records) {
   // Process records in parallel batches of 10
-  // This helps complete the job before the worker CPU time limit is reached.
   await withConcurrency(records, 10, async (r) => {
     const f = r.fields || {};
-    const photoField = f['Photo'];
-    const imageField = f['Image'];
+    
+    // collectPhotoUrls now properly extracts all URLs as strings
+    const photoUrls = collectPhotoUrls(f['Photo']);
+    const imageUrls = collectPhotoUrls(f['Image']);
 
-    // Check if fields are actually attachments (array of objects)
-    const isPhotoArr = Array.isArray(photoField) && typeof photoField[0] === 'object' && (photoField[0]?.url || photoField[0]?.thumbnails);
-    const isImageArr = Array.isArray(imageField) && typeof imageField[0] === 'object' && (imageField[0]?.url || imageField[0]?.thumbnails);
-
-    if (isPhotoArr) {
-      await prewarmAttachments(env, r.id, photoField, 6);
+    if (photoUrls.length > 0) {
+      await prewarmAttachments(env, r.id, photoUrls, 6);
     }
-    if (isImageArr) {
-      await prewarmAttachments(env, r.id, imageField, 6);
+    if (imageUrls.length > 0) {
+      await prewarmAttachments(env, r.id, imageUrls, 6);
     }
   });
 }
@@ -314,7 +309,10 @@ function parseGeometry(raw) {
 }
 function pickAttachmentUrl(att) {
   if (!att) return null;
-  if (typeof att === 'string') return /^https?:\/\//i.test(att) ? att : null;
+  if (typeof att === 'string') {
+    const trimmed = att.trim(); // Prevent regex failures from leading spaces
+    return /^https?:\/\//i.test(trimmed) ? trimmed : null;
+  }
   return att?.thumbnails?.large?.url || att?.thumbnails?.full?.url || att?.url || null;
 }
 function normalizeUrl(u) {
@@ -335,7 +333,7 @@ function collectPhotoUrls(value) {
         try { pushAny(JSON.parse(s)); return; } catch {}
       }
       (s.includes(',') ? s.split(',') : [s]).forEach((part) => {
-        const maybe = pickAttachmentUrl(part);
+        const maybe = pickAttachmentUrl(part.trim()); // Added trim() here!
         if (maybe) urls.add(normalizeUrl(maybe));
       });
       return;
