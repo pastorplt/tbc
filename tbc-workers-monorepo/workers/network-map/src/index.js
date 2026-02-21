@@ -1,9 +1,10 @@
 // Static publishing model for your network map
 // Routes:
-//   GET  /networks.geojson              -> serve latest from R2
-//   POST /networks/admin/regenerate     -> (Bearer REGEN_TOKEN) rebuild from Airtable and publish to R2
-//   GET  /networks/img/<id>/<index>     -> Proxy for 'Photo' field
-//   GET  /networks/image/<id>/<index>   -> Proxy for 'Image' field
+//   GET  /networks.geojson                   -> serve latest from R2
+//   POST /networks/admin/regenerate          -> (Bearer REGEN_TOKEN) rebuild + flush image cache
+//   POST /networks/admin/regenerate-noflush  -> (Bearer REGEN_TOKEN) rebuild, skip already-cached images
+//   GET  /networks/img/<id>/<index>          -> Proxy for 'Photo' field
+//   GET  /networks/image/<id>/<index>        -> Proxy for 'Image' field
 //
 // Requires (Settings → Variables/Secrets):
 //   AIRTABLE_TOKEN, AIRTABLE_BASE_ID, NETWORKS_TABLE_NAME, REGEN_TOKEN
@@ -34,89 +35,31 @@ export default {
         }));
       }
 
-      // 2. REGENERATE (Admin)
+      // 2. REGENERATE — flush mode (default)
+      // Overwrites all existing R2 image cache. Use this when images have
+      // changed in Airtable and you need them to update.
       if (request.method === 'POST' && (pathname === '/admin/regenerate' || pathname === '/networks/admin/regenerate')) {
         const token = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
         if (!token || token !== env.REGEN_TOKEN) {
           return withCORS(json({ error: 'Unauthorized' }, 401));
         }
-
-        const records = await fetchAllRecords(env);
-
-        // Best-effort background prewarm. The pull-through cache in the proxy
-        // routes guarantees images reach R2 even if prewarm misses some.
-        if (env.NETWORK_IMAGES_BUCKET) {
-          ctx.waitUntil(prewarmAll(env, records));
-        }
-
-        const origin = new URL(request.url).origin;
-        const features = [];
-
-        for (const r of records) {
-          const f = r.fields || {};
-          const geometry = parseGeometry(f['Polygon']);
-          if (!geometry) continue;
-
-          const leaders = normalizeLeaders(f['Network Leaders Names']) || '';
-
-          let photoUrls = [];
-          const extractedPhotos = collectPhotoUrls(f['Photo']);
-          if (extractedPhotos.length > 0) {
-            photoUrls = extractedPhotos.slice(0, 6).map((_, idx) => `${origin}/networks/img/${r.id}/${idx}`);
-          }
-
-          let imageUrls = [];
-          const extractedImages = collectPhotoUrls(f['Image']);
-          if (extractedImages.length > 0) {
-            imageUrls = extractedImages.slice(0, 6).map((_, idx) => `${origin}/networks/image/${r.id}/${idx}`);
-          }
-
-          const [photo1='', photo2='', photo3='', photo4='', photo5='', photo6=''] = photoUrls;
-          const [image1='', image2='', image3='', image4='', image5='', image6=''] = imageUrls;
-
-          features.push({
-            type: 'Feature',
-            geometry,
-            properties: {
-              id: r.id,
-              name: f['Network Name'] ?? '',
-              leaders,
-              contact_email: normalizeTextField(f['contact email'] ?? f['Contact Email']),
-              status: normalizeTextField(f['Status']),
-              county: normalizeTextField(f['County']),
-              tags: normalizeTextField(f['Tags']),
-              // FIX: normalize like all other fields to handle array/object values from Airtable
-              number_of_churches: normalizeTextField(f['Number of Churches']),
-              unify_lead: normalizeTextField(f['Unify Lead']),
-              photo1, photo2, photo3, photo4, photo5, photo6,
-              photo_count: photoUrls.filter(Boolean).length,
-              image1, image2, image3, image4, image5, image6,
-              image_count: imageUrls.filter(Boolean).length,
-            },
-          });
-        }
-
-        const fc = JSON.stringify({ type: 'FeatureCollection', features });
-
-        await env.NETWORK_MAP_BUCKET.put('latest.geojson', fc, {
-          httpMetadata: {
-            contentType: 'application/geo+json; charset=utf-8',
-            cacheControl: 'public, max-age=60'
-          }
-        });
-
-        return withCORS(json({
-          ok: true,
-          features: features.length,
-          updatedAt: new Date().toISOString(),
-          note: 'Image caching running in background'
-        }));
+        return withCORS(await handleRegenerate(request, env, ctx, { flush: true }));
       }
 
-      // 3. IMAGE PROXY: /networks/img/
+      // 3. REGENERATE — no-flush mode
+      // Skips images already in R2. Faster and cheaper when only GeoJSON
+      // data has changed and images haven't.
+      if (request.method === 'POST' && (pathname === '/admin/regenerate-noflush' || pathname === '/networks/admin/regenerate-noflush')) {
+        const token = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+        if (!token || token !== env.REGEN_TOKEN) {
+          return withCORS(json({ error: 'Unauthorized' }, 401));
+        }
+        return withCORS(await handleRegenerate(request, env, ctx, { flush: false }));
+      }
+
+      // 4. IMAGE PROXY: /networks/img/
       if (request.method === 'GET' && pathname.startsWith('/networks/img/')) {
         const { recordId, index } = parseAttachmentPath(pathname, '/networks/img/');
-        // FIX: validate recordId format and index before any downstream use
         if (!isValidRecordId(recordId) || !isValidIndex(index)) {
           return withCORS(text('Bad request', 400));
         }
@@ -134,10 +77,9 @@ export default {
         return withCORS(await handleAttachmentProxy(env, ctx, recordId, index, 'Photo'));
       }
 
-      // 4. IMAGE PROXY: /networks/image/
+      // 5. IMAGE PROXY: /networks/image/
       if (request.method === 'GET' && pathname.startsWith('/networks/image/')) {
         const { recordId, index } = parseAttachmentPath(pathname, '/networks/image/');
-        // FIX: validate recordId format and index before any downstream use
         if (!isValidRecordId(recordId) || !isValidIndex(index)) {
           return withCORS(text('Bad request', 400));
         }
@@ -167,25 +109,92 @@ export default {
   }
 };
 
+/* ---------------- Regenerate handler ---------------- */
+
+async function handleRegenerate(request, env, ctx, { flush }) {
+  const records = await fetchAllRecords(env);
+
+  if (env.NETWORK_IMAGES_BUCKET) {
+    ctx.waitUntil(prewarmAll(env, records, { flush }));
+  }
+
+  const origin = new URL(request.url).origin;
+  const features = [];
+
+  for (const r of records) {
+    const f = r.fields || {};
+    const geometry = parseGeometry(f['Polygon']);
+    if (!geometry) continue;
+
+    const leaders = normalizeLeaders(f['Network Leaders Names']) || '';
+
+    let photoUrls = [];
+    const extractedPhotos = collectPhotoUrls(f['Photo']);
+    if (extractedPhotos.length > 0) {
+      photoUrls = extractedPhotos.slice(0, 6).map((_, idx) => `${origin}/networks/img/${r.id}/${idx}`);
+    }
+
+    let imageUrls = [];
+    const extractedImages = collectPhotoUrls(f['Image']);
+    if (extractedImages.length > 0) {
+      imageUrls = extractedImages.slice(0, 6).map((_, idx) => `${origin}/networks/image/${r.id}/${idx}`);
+    }
+
+    const [photo1='', photo2='', photo3='', photo4='', photo5='', photo6=''] = photoUrls;
+    const [image1='', image2='', image3='', image4='', image5='', image6=''] = imageUrls;
+
+    features.push({
+      type: 'Feature',
+      geometry,
+      properties: {
+        id: r.id,
+        name: f['Network Name'] ?? '',
+        leaders,
+        contact_email: normalizeTextField(f['contact email'] ?? f['Contact Email']),
+        status: normalizeTextField(f['Status']),
+        county: normalizeTextField(f['County']),
+        tags: normalizeTextField(f['Tags']),
+        number_of_churches: normalizeTextField(f['Number of Churches']),
+        unify_lead: normalizeTextField(f['Unify Lead']),
+        photo1, photo2, photo3, photo4, photo5, photo6,
+        photo_count: photoUrls.filter(Boolean).length,
+        image1, image2, image3, image4, image5, image6,
+        image_count: imageUrls.filter(Boolean).length,
+      },
+    });
+  }
+
+  const fc = JSON.stringify({ type: 'FeatureCollection', features });
+
+  await env.NETWORK_MAP_BUCKET.put('latest.geojson', fc, {
+    httpMetadata: {
+      contentType: 'application/geo+json; charset=utf-8',
+      cacheControl: 'public, max-age=60'
+    }
+  });
+
+  return json({
+    ok: true,
+    features: features.length,
+    updatedAt: new Date().toISOString(),
+    note: flush
+      ? 'Image cache flush running in background'
+      : 'Image cache prewarm running in background (existing images skipped)'
+  });
+}
+
 /* ---------------- R2 key helper ---------------- */
 
-// FIX: Single source of truth for the R2 key format used by both the proxy
-// routes and prewarm. Renamed from /w400-webp to /original since no
-// transformation is applied — the image is stored as-is from Airtable.
 function r2Key(recordId, index) {
   return `images/${recordId}/${index}/original`;
 }
 
 /* ---------------- Validation helpers ---------------- */
 
-// FIX: Validate recordId before using it in R2 keys or Airtable API URLs
-// to prevent path traversal and URL injection attacks.
 function isValidRecordId(id) {
   return typeof id === 'string' && /^rec[a-zA-Z0-9]{14}$/.test(id);
 }
 
-// FIX: Validate index is a real integer in range before the R2 lookup,
-// preventing NaN keys like images/recXXX/NaN/original.
 function isValidIndex(index) {
   return Number.isInteger(index) && index >= 0 && index <= 5;
 }
@@ -262,6 +271,9 @@ async function handleAttachmentProxy(env, ctx, recordId, index, fieldName) {
 // Runs in the background after regenerate. Not the critical path —
 // the pull-through cache above handles any misses. Failures are logged
 // but not fatal.
+//
+// flush: true  — overwrites existing R2 keys (default regenerate)
+// flush: false — skips existing R2 keys (regenerate-noflush)
 
 async function withConcurrency(items, limit, fn) {
   const results = [];
@@ -280,7 +292,7 @@ async function withConcurrency(items, limit, fn) {
   return results;
 }
 
-async function prewarmAttachments(env, recordId, urlStrings, maxCount = 6) {
+async function prewarmAttachments(env, recordId, urlStrings, maxCount = 6, { flush }) {
   if (!env.NETWORK_IMAGES_BUCKET) return;
   if (!Array.isArray(urlStrings) || urlStrings.length === 0) return;
 
@@ -292,10 +304,11 @@ async function prewarmAttachments(env, recordId, urlStrings, maxCount = 6) {
 
     const key = r2Key(recordId, idx);
 
-    // FIX: skip images already in R2 to avoid redundant Airtable fetches
-    // and R2 write costs on every regeneration
-    const existing = await env.NETWORK_IMAGES_BUCKET.head(key);
-    if (existing) return;
+    if (!flush) {
+      // No-flush mode: skip images already cached
+      const existing = await env.NETWORK_IMAGES_BUCKET.head(key);
+      if (existing) return;
+    }
 
     const response = await fetch(srcUrl);
     if (!response.ok) {
@@ -310,13 +323,13 @@ async function prewarmAttachments(env, recordId, urlStrings, maxCount = 6) {
   });
 }
 
-async function prewarmAll(env, records) {
+async function prewarmAll(env, records, { flush }) {
   await withConcurrency(records, 10, async (r) => {
     const f = r.fields || {};
     const photoUrls = collectPhotoUrls(f['Photo']);
     const imageUrls = collectPhotoUrls(f['Image']);
-    if (photoUrls.length > 0) await prewarmAttachments(env, r.id, photoUrls, 6);
-    if (imageUrls.length > 0) await prewarmAttachments(env, r.id, imageUrls, 6);
+    if (photoUrls.length > 0) await prewarmAttachments(env, r.id, photoUrls, 6, { flush });
+    if (imageUrls.length > 0) await prewarmAttachments(env, r.id, imageUrls, 6, { flush });
   });
 }
 
@@ -347,7 +360,6 @@ function pickAttachmentUrl(att) {
 }
 
 function normalizeUrl(u) {
-  // FIX: removed redundant second whitespace strip — .trim() already handles it
   return String(u || '').trim().replace(/^%20+/i, '');
 }
 
